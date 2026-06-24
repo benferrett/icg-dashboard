@@ -172,19 +172,21 @@ export const DS_SAT_STAGES = [
 
 // Membership-sold stages keyed by tier (for sold-this-period counting via
 // hs_v2_date_entered_<stageId>).
+// NOTE: Referral memberships (2872614380) are intentionally EXCLUDED — per Ben,
+// referrals are not counted as sales.
 export const MEMBERSHIP_SOLD_TIERS: Record<string, string> = {
   "2400252401": "Bronze",
   "2399433181": "Silver",
   "2547683827": "Gold",
-  "2872614380": "Referral",
 };
 
-// Stages that represent a "won" membership (sold)
+// Stages that represent a "won" membership (sold).
+// NOTE: Referral memberships (2872614380) are intentionally EXCLUDED — referrals
+// don't count as sales.
 export const MEMBERSHIP_SOLD_STAGES = [
   "2400252401", // Bronze
   "2399433181", // Silver
   "2547683827", // Gold
-  "2872614380", // Referral Membership
 ];
 
 export const SOURCE_LABELS: Record<string, string> = {
