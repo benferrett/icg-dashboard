@@ -19,6 +19,7 @@ import {
   CONTRACT_UC_PIPELINES,
   CONTRACT_EXCLUDE_STAGES,
   CONTRACT_STAGE_TO_STEP,
+  isStrategistOwner,
 } from "./reference";
 
 function isoDaysAgo(days: number): string {
@@ -536,6 +537,36 @@ async function contracts(range: PeriodRange) {
     1000,
   );
 
+  // --- Strategist attribution via the associated CLIENT CONTACT's owner -----
+  // Contract/settlement deals are owned by the contract team (Raul Garcia), so
+  // we derive the strategist from each deal's associated contact. When a deal
+  // has multiple contacts we prefer one whose owner is a known strategist.
+  const dealIds = deals.map((d) => d.id);
+  const dealStrategist: Record<string, string> = {};
+  if (dealIds.length) {
+    const assoc = await hubspot.batchAssociations("deals", "contacts", dealIds);
+    const allContactIds = Array.from(
+      new Set(Object.values(assoc).flat()),
+    );
+    const contactOwners = allContactIds.length
+      ? await hubspot.batchRead("contacts", allContactIds, ["hubspot_owner_id"])
+      : {};
+    for (const dealId of dealIds) {
+      const contactIds = assoc[dealId] || [];
+      // Prefer a contact owned by a known strategist; else first contact owner.
+      let chosenOwnerId: string | undefined;
+      for (const cid of contactIds) {
+        const oid = contactOwners[cid]?.hubspot_owner_id;
+        if (isStrategistOwner(oid)) {
+          chosenOwnerId = oid || undefined;
+          break;
+        }
+        if (!chosenOwnerId && oid) chosenOwnerId = oid;
+      }
+      if (chosenOwnerId) dealStrategist[dealId] = ownerName(chosenOwnerId);
+    }
+  }
+
   // step key -> { count, value, byStrategist: {name -> count} }
   const steps: Record<string, { count: number; value: number; byStrategist: Record<string, number> }> = {};
   for (const s of CONTRACT_FUNNEL_STEPS) {
@@ -576,7 +607,12 @@ async function contracts(range: PeriodRange) {
     }
 
     const amt = num(d.properties.amount_in_home_currency) || num(d.properties.amount);
-    const owner = ownerName(d.properties.hubspot_owner_id);
+    // Strategist = associated client-contact owner; fall back to deal owner,
+    // then to "Unattributed" if neither resolves.
+    const owner =
+      dealStrategist[d.id] ||
+      ownerName(d.properties.hubspot_owner_id) ||
+      "Unattributed";
 
     const bucket = steps[stepKey];
     bucket.count++;

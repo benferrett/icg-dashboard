@@ -247,6 +247,22 @@ export const CONTRACT_UC_PIPELINES = [
 // Stage explicitly excluded from the contract funnel (lost / cancelled).
 export const CONTRACT_EXCLUDE_STAGES = ["3112795614"]; // EOI Cancelled
 
+// Strategist owner IDs. Contract/settlement deals are owned by the contract
+// team (Raul Garcia), so strategist attribution for contracts must come from
+// the associated CLIENT CONTACT's owner. When a deal has multiple contacts we
+// prefer one whose owner is a known strategist.
+export const STRATEGIST_OWNERS: Record<string, string> = {
+  "362352488": "Patrick Van Orsouw",
+  "363222039": "Renee O'Connell",
+  "363184380": "Rob Gallacher",
+  "361919911": "Steven Mau",
+  "361919740": "Steven Mau",
+};
+
+export function isStrategistOwner(id?: string | null): boolean {
+  return !!id && id in STRATEGIST_OWNERS;
+}
+
 // Map every contract-funnel stage id -> funnel step key, for fast lookup.
 export const CONTRACT_STAGE_TO_STEP: Record<string, string> = (() => {
   const m: Record<string, string> = {};
