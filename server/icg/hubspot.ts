@@ -56,13 +56,77 @@ async function searchPost(payload: any, objectType = "deals"): Promise<any> {
 
 // Search deals with paging. Returns up to `cap` records.
 async function searchDeals(body: any, cap = 1000): Promise<Deal[]> {
+  return searchObjects("deals", body, cap);
+}
+
+// Generic paged search for any CRM object (deals, contacts, meetings, calls).
+async function searchObjects(
+  objectType: string,
+  body: any,
+  cap = 1000,
+): Promise<Deal[]> {
   const out: Deal[] = [];
   let after: string | undefined = undefined;
   while (out.length < cap) {
-    const json: any = await searchPost({ ...body, limit: 100, after });
+    const json: any = await searchPost({ ...body, limit: 100, after }, objectType);
     for (const r of json.results || []) out.push(r);
     after = json.paging?.next?.after;
     if (!after) break;
+  }
+  return out;
+}
+
+// --- Batch helpers (associations v4 + object batch read) ------------------
+// Plain (non-search) endpoints are not rate-limited like /search, but we still
+// route through the proxy via apiFetch.
+async function apiPost(path: string, payload: any): Promise<any> {
+  const res = await apiFetch("hubspot", path, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const txt = await res.text();
+    throw new Error(`HubSpot ${path} ${res.status}: ${txt.slice(0, 200)}`);
+  }
+  return res.json();
+}
+
+// Map each fromId -> array of associated toObjectIds (e.g. contacts -> calls).
+async function batchAssociations(
+  fromType: string,
+  toType: string,
+  ids: string[],
+): Promise<Record<string, string[]>> {
+  const result: Record<string, string[]> = {};
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const json = await apiPost(
+      `/crm/v4/associations/${fromType}/${toType}/batch/read`,
+      { inputs: chunk.map((id) => ({ id })) },
+    );
+    for (const res of json.results || []) {
+      const from = res.from?.id;
+      if (!from) continue;
+      result[from] = (res.to || []).map((t: any) => String(t.toObjectId));
+    }
+  }
+  return result;
+}
+
+// Batch-read properties for a set of object IDs.
+async function batchRead(
+  objectType: string,
+  ids: string[],
+  properties: string[],
+): Promise<Record<string, Record<string, string | undefined>>> {
+  const out: Record<string, Record<string, string | undefined>> = {};
+  for (let i = 0; i < ids.length; i += 100) {
+    const chunk = ids.slice(i, i + 100);
+    const json = await apiPost(`/crm/v3/objects/${objectType}/batch/read`, {
+      properties,
+      inputs: chunk.map((id) => ({ id })),
+    });
+    for (const r of json.results || []) out[r.id] = r.properties;
   }
   return out;
 }
@@ -82,4 +146,11 @@ async function countContacts(filterGroups: any[]): Promise<number> {
   return json.total || 0;
 }
 
-export const hubspot = { searchDeals, countDeals, countContacts };
+export const hubspot = {
+  searchDeals,
+  searchObjects,
+  countDeals,
+  countContacts,
+  batchAssociations,
+  batchRead,
+};

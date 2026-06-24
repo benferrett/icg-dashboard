@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { apiGet, Dashboard, MetaData } from "@/lib/api";
+import { apiGet, Dashboard, MetaData, FunnelWindow } from "@/lib/api";
 import { fmtCurrency, fmtNumber, fmtMonth, fmtDateShort, timeAgo } from "@/lib/format";
 import { Logo } from "@/components/dashboard/Logo";
 import { Stat } from "@/components/dashboard/Stat";
@@ -42,6 +42,7 @@ import {
   Moon,
   Sun,
   Layers,
+  Filter,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -87,6 +88,7 @@ export default function DashboardPage({
 }) {
   const { dark, toggle } = useDarkMode();
   const [refreshing, setRefreshing] = useState(false);
+  const [funnelWin, setFunnelWin] = useState<"week" | "month" | "fy">("week");
 
   const dash = useQuery<Dashboard>({
     queryKey: ["/api/dashboard"],
@@ -313,6 +315,147 @@ export default function DashboardPage({
               </div>
             </Card>
           </div>
+        </Section>
+
+        {/* SALES FUNNEL */}
+        <Section title="Sales funnel" icon={<Filter className="h-4 w-4 text-primary" />}>
+          {loading || !d ? (
+            <Skeleton className="h-64 w-full" />
+          ) : d.salesFunnel?.ok === false ? (
+            <Card className="p-4 border-amber-500/40 flex items-start gap-3">
+              <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+              <div className="text-sm">
+                <div className="font-medium">Sales funnel unavailable</div>
+                <div className="text-muted-foreground">
+                  {d.salesFunnel?.error || "Could not load funnel data."}
+                </div>
+              </div>
+            </Card>
+          ) : (
+            (() => {
+              const win: FunnelWindow | undefined = d.salesFunnel?.[funnelWin];
+              if (!win) return null;
+              return (
+                <div className="flex flex-col gap-4">
+                  {/* Window toggle */}
+                  <div className="flex items-center gap-1.5">
+                    {([
+                      ["week", "This week"],
+                      ["month", "This month"],
+                      ["fy", "This FY"],
+                    ] as const).map(([k, label]) => (
+                      <Button
+                        key={k}
+                        size="sm"
+                        variant={funnelWin === k ? "default" : "outline"}
+                        onClick={() => setFunnelWin(k)}
+                        data-testid={`button-funnel-${k}`}
+                      >
+                        {label}
+                      </Button>
+                    ))}
+                  </div>
+
+                  {/* Funnel KPI row */}
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                    <Stat
+                      label="New leads"
+                      value={fmtNumber(win.totals.leads)}
+                      sub={win.label}
+                      testId="funnel-leads"
+                      accent
+                    />
+                    <Stat
+                      label="Contact rate"
+                      value={`${win.totals.contactRate}%`}
+                      sub={`${fmtNumber(win.totals.contacted)} contacted`}
+                      testId="funnel-contact-rate"
+                    />
+                    <Stat
+                      label="Connected >30s"
+                      value={`${win.totals.connectRate}%`}
+                      sub={`${fmtNumber(win.totals.connected)} spoke`}
+                      testId="funnel-connect-rate"
+                    />
+                    <Stat
+                      label="DS booked"
+                      value={fmtNumber(win.dsBooked)}
+                      sub={`${fmtNumber(win.dsStarted)} started`}
+                      testId="funnel-ds-booked"
+                    />
+                    <Stat
+                      label="DS sat"
+                      value={fmtNumber(win.dsSat)}
+                      sub="held sessions"
+                      testId="funnel-ds-sat"
+                    />
+                    <Stat
+                      label="Memberships sold"
+                      value={fmtNumber(win.membershipsSold)}
+                      sub={
+                        Object.entries(win.membershipTiers)
+                          .filter(([, n]) => n > 0)
+                          .map(([t, n]) => `${n}${t[0]}`)
+                          .join(" · ") || "none yet"
+                      }
+                      testId="funnel-sold"
+                    />
+                  </div>
+
+                  {/* Per-consultant contact funnel */}
+                  <Card className="overflow-hidden">
+                    <div className="px-4 pt-4 pb-2 text-sm font-medium">
+                      Lead contact by consultant · {win.label.toLowerCase()}
+                    </div>
+                    <Table>
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead>Consultant</TableHead>
+                          <TableHead className="text-right">Leads</TableHead>
+                          <TableHead className="text-right">Contacted</TableHead>
+                          <TableHead className="text-right">Contact %</TableHead>
+                          <TableHead className="text-right">Spoke &gt;30s</TableHead>
+                          <TableHead className="text-right">Connect %</TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {win.consultants.map((c) => (
+                          <TableRow key={c.name} data-testid={`row-funnel-${c.name}`}>
+                            <TableCell className="font-medium">{c.name}</TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {fmtNumber(c.leads)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {fmtNumber(c.contacted)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Badge
+                                variant={c.contactRate >= 80 ? "default" : "secondary"}
+                                className="tabular-nums"
+                              >
+                                {c.contactRate}%
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums">
+                              {fmtNumber(c.connected)}
+                            </TableCell>
+                            <TableCell className="text-right">
+                              <Badge
+                                variant={c.connectRate >= 50 ? "default" : "secondary"}
+                                className="tabular-nums"
+                              >
+                                {c.connectRate}%
+                              </Badge>
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </Card>
+                </div>
+              );
+            })()
+          )}
         </Section>
 
         {/* CONSULTANT + STRATEGIST TEAMS */}

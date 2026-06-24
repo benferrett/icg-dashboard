@@ -9,6 +9,10 @@ import {
   MEMBERSHIP_STAGES,
   MEMBERSHIP_SOLD_STAGES,
   DISCOVERY_BOOKED_STAGE,
+  BOOKING_CONSULTANTS,
+  DS_TITLE_PREFIX,
+  DS_SAT_STAGES,
+  MEMBERSHIP_SOLD_TIERS,
 } from "./reference";
 
 function isoDaysAgo(days: number): string {
@@ -150,6 +154,271 @@ async function embr() {
       last90: win(0),
       total: win(0),
     };
+  }
+}
+
+// ---- SALES FUNNEL ----------------------------------------------------------
+// Five funnel metrics tracked per window (this week / month / FY), mirroring the
+// weekly sales-management report methodology:
+//   1. contact rate of leads        (any call logged on the lead)
+//   2. leads connected > 30 seconds (a call with duration >= 30000 ms)
+//   3. discovery sessions booked     (DS-titled meeting created in window)
+//   4. discovery sessions sat        (DS meeting started + validated via DS Sat-* stage)
+//   5. memberships sold              (deal entered a membership-sold stage in window)
+// Consultants are paid on SAT sessions, so sat validation must be exact.
+
+const MEL_OFFSET_MS = 10 * 60 * 60 * 1000; // Australia/Melbourne (no DST in scope)
+const CONNECT_MS = 30000; // >= 30s connect threshold (hs_call_duration is in ms)
+
+// UTC ISO string of a Melbourne-local calendar boundary.
+function melBoundary(kind: "week" | "month" | "fy"): string {
+  const nowMel = new Date(Date.now() + MEL_OFFSET_MS);
+  const y = nowMel.getUTCFullYear();
+  const m = nowMel.getUTCMonth(); // 0-based
+  const d = nowMel.getUTCDate();
+  let melMidnightUtcMs: number;
+  if (kind === "week") {
+    // Monday 00:00 Melbourne. getUTCDay: 0=Sun..6=Sat -> days since Monday.
+    const dow = nowMel.getUTCDay();
+    const daysSinceMon = (dow + 6) % 7;
+    melMidnightUtcMs = Date.UTC(y, m, d - daysSinceMon, 0, 0, 0);
+  } else if (kind === "month") {
+    melMidnightUtcMs = Date.UTC(y, m, 1, 0, 0, 0);
+  } else {
+    // AU financial year starts 1 July. getUTCMonth() 6 === July.
+    const fyYear = m >= 6 ? y : y - 1;
+    melMidnightUtcMs = Date.UTC(fyYear, 6, 1, 0, 0, 0);
+  }
+  // melMidnightUtcMs was built as if Melbourne-local == UTC; subtract the offset
+  // to get the true UTC instant of that Melbourne wall-clock midnight.
+  return new Date(melMidnightUtcMs - MEL_OFFSET_MS).toISOString();
+}
+
+interface FunnelConsultant {
+  name: string;
+  leads: number;
+  contacted: number;
+  connected: number;
+  contactRate: number;
+  connectRate: number;
+}
+
+// Contact funnel: new leads (contacts) created in window, split by booking
+// consultant, with contact rate (any call) and >30s connect rate.
+async function contactFunnel(startIso: string) {
+  const contacts = await hubspot.searchObjects(
+    "contacts",
+    {
+      filterGroups: [
+        { filters: [{ propertyName: "createdate", operator: "GTE", value: startIso }] },
+      ],
+      properties: ["hubspot_owner_id", "createdate"],
+      sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
+    },
+    5000,
+  );
+
+  const leadIds = contacts.map((c) => c.id);
+  const leadOwner: Record<string, string | undefined> = {};
+  for (const c of contacts) leadOwner[c.id] = c.properties.hubspot_owner_id;
+
+  // contact -> associated call ids
+  const callAssoc = leadIds.length
+    ? await hubspot.batchAssociations("contacts", "calls", leadIds)
+    : {};
+  const allCallIds = Array.from(new Set(Object.values(callAssoc).flat()));
+  const callProps = allCallIds.length
+    ? await hubspot.batchRead("calls", allCallIds, ["hs_call_duration"])
+    : {};
+
+  // Group by canonical consultant name (BOOKING_CONSULTANTS), plus an
+  // "Other / Unassigned" bucket so totals reconcile with total leads.
+  type Agg = { leads: number; contacted: number; connected: number };
+  const byName: Record<string, Agg> = {};
+  const ensure = (n: string) =>
+    (byName[n] = byName[n] || { leads: 0, contacted: 0, connected: 0 });
+
+  for (const id of leadIds) {
+    const owner = leadOwner[id];
+    const name = (owner && BOOKING_CONSULTANTS[owner]) || "Other / Unassigned";
+    const agg = ensure(name);
+    agg.leads++;
+    const calls = callAssoc[id] || [];
+    if (calls.length) {
+      agg.contacted++;
+      const connected = calls.some(
+        (cid) => num(callProps[cid]?.hs_call_duration) >= CONNECT_MS,
+      );
+      if (connected) agg.connected++;
+    }
+  }
+
+  const consultants: FunnelConsultant[] = Object.entries(byName)
+    .map(([name, v]) => ({
+      name,
+      leads: v.leads,
+      contacted: v.contacted,
+      connected: v.connected,
+      contactRate: v.leads ? Math.round((v.contacted / v.leads) * 100) : 0,
+      connectRate: v.leads ? Math.round((v.connected / v.leads) * 100) : 0,
+    }))
+    .sort((a, b) => b.leads - a.leads);
+
+  const t = consultants.reduce(
+    (acc, c) => {
+      acc.leads += c.leads;
+      acc.contacted += c.contacted;
+      acc.connected += c.connected;
+      return acc;
+    },
+    { leads: 0, contacted: 0, connected: 0 },
+  );
+  const totals = {
+    leads: t.leads,
+    contacted: t.contacted,
+    connected: t.connected,
+    contactRate: t.leads ? Math.round((t.contacted / t.leads) * 100) : 0,
+    connectRate: t.leads ? Math.round((t.connected / t.leads) * 100) : 0,
+  };
+  return { consultants, totals };
+}
+
+// Discovery sessions: booked = DS-titled meeting created in window;
+// sat = DS meeting that has started, validated via an associated deal sitting in
+// any DS Sat-* stage (fallback: hs_meeting_outcome === "COMPLETED").
+async function discoverySessions(startIso: string, nowIso: string) {
+  const meetings = await hubspot.searchObjects(
+    "meetings",
+    {
+      filterGroups: [
+        { filters: [{ propertyName: "hs_createdate", operator: "GTE", value: startIso }] },
+      ],
+      properties: [
+        "hs_meeting_title",
+        "hs_meeting_start_time",
+        "hs_meeting_outcome",
+        "hs_createdate",
+      ],
+      sorts: [{ propertyName: "hs_createdate", direction: "DESCENDING" }],
+    },
+    3000,
+  );
+
+  const isDs = (m: any) =>
+    (m.properties.hs_meeting_title || "").startsWith(DS_TITLE_PREFIX);
+  const dsMeetings = meetings.filter(isDs);
+
+  // Booked: DS meeting created in window.
+  const booked = dsMeetings.length;
+
+  // Candidate sat: DS meeting that has already started (start_time in [start, now]).
+  const started = dsMeetings.filter((m) => {
+    const st = m.properties.hs_meeting_start_time;
+    return !!st && st >= startIso && st <= nowIso;
+  });
+
+  let sat = 0;
+  if (started.length) {
+    const meetingIds = started.map((m) => m.id);
+    const dealAssoc = await hubspot.batchAssociations("meetings", "deals", meetingIds);
+    const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
+    const dealProps = allDealIds.length
+      ? await hubspot.batchRead("deals", allDealIds, ["dealstage"])
+      : {};
+    for (const m of started) {
+      const deals = dealAssoc[m.id] || [];
+      const satByStage = deals.some((did) =>
+        DS_SAT_STAGES.includes(dealProps[did]?.dealstage || ""),
+      );
+      const satByOutcome = m.properties.hs_meeting_outcome === "COMPLETED";
+      if (satByStage || satByOutcome) sat++;
+    }
+  }
+
+  return { booked, started: started.length, sat };
+}
+
+// Memberships sold in window: for each membership-sold stage, find deals and
+// count those that ENTERED the stage within the window. hs_v2_date_entered_*
+// is NOT API-filterable (returns 400), so we filter in code.
+async function membershipsSoldSince(startIso: string) {
+  const tiers: Record<string, number> = {};
+  let total = 0;
+  for (const [stageId, tier] of Object.entries(MEMBERSHIP_SOLD_TIERS)) {
+    const enteredProp = `hs_v2_date_entered_${stageId}`;
+    const deals = await hubspot.searchObjects(
+      "deals",
+      {
+        filterGroups: [
+          { filters: [{ propertyName: "dealstage", operator: "EQ", value: stageId }] },
+        ],
+        properties: ["dealstage", enteredProp],
+      },
+      2000,
+    );
+    let count = 0;
+    for (const d of deals) {
+      const entered = d.properties[enteredProp];
+      if (entered && entered >= startIso) count++;
+    }
+    tiers[tier] = count;
+    total += count;
+  }
+  return { total, tiers };
+}
+
+interface FunnelWindow {
+  label: string;
+  start: string;
+  consultants: FunnelConsultant[];
+  totals: {
+    leads: number;
+    contacted: number;
+    connected: number;
+    contactRate: number;
+    connectRate: number;
+  };
+  dsBooked: number;
+  dsStarted: number;
+  dsSat: number;
+  membershipsSold: number;
+  membershipTiers: Record<string, number>;
+}
+
+async function salesFunnelWindow(
+  label: string,
+  start: string,
+  nowIso: string,
+): Promise<FunnelWindow> {
+  const [contact, ds, sold] = await Promise.all([
+    contactFunnel(start),
+    discoverySessions(start, nowIso),
+    membershipsSoldSince(start),
+  ]);
+  return {
+    label,
+    start,
+    consultants: contact.consultants,
+    totals: contact.totals,
+    dsBooked: ds.booked,
+    dsStarted: ds.started,
+    dsSat: ds.sat,
+    membershipsSold: sold.total,
+    membershipTiers: sold.tiers,
+  };
+}
+
+async function salesFunnel() {
+  try {
+    const nowIso = new Date().toISOString();
+    const [week, month, fy] = await Promise.all([
+      salesFunnelWindow("This Week", melBoundary("week"), nowIso),
+      salesFunnelWindow("This Month", melBoundary("month"), nowIso),
+      salesFunnelWindow("This FY", melBoundary("fy"), nowIso),
+    ]);
+    return { ok: true, week, month, fy };
+  } catch (err: any) {
+    return { ok: false, error: err?.message || "Sales funnel data unavailable" };
   }
 }
 
@@ -333,6 +602,7 @@ export async function buildDashboard() {
     pipelines,
     mkt,
     embrData,
+    funnel,
     consultants,
     strategists,
     members,
@@ -342,6 +612,7 @@ export async function buildDashboard() {
     pipelineTotals(),
     marketing(),
     embr(),
+    salesFunnel(),
     consultantTeam(),
     strategistTeam(),
     memberships(),
@@ -354,6 +625,7 @@ export async function buildDashboard() {
     pipelines,
     marketing: mkt,
     embr: embrData,
+    salesFunnel: funnel,
     consultants,
     strategists,
     memberships: members,

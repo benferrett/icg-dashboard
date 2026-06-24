@@ -140,6 +140,45 @@ export const MEMBERSHIP_STAGES = {
 
 export const DISCOVERY_BOOKED_STAGE = "2870714823";
 
+// Booking consultants who work fresh leads + book Discovery Sessions.
+// Maps every owner-id variant -> canonical name. Ben Houghton is Head of
+// Consultants (separate comp plan) but still books, so he's included here.
+export const BOOKING_CONSULTANTS: Record<string, string> = {
+  "362741341": "Steven Green",
+  "363811156": "Moses Emmanuel",
+  "363808537": "Moses Emmanuel",
+  "362495114": "Akhil Venugopal",
+  "361455466": "Ben Houghton",
+};
+
+// Discovery Session meetings are titled "Inner Circle Group Discovery Session: …".
+// Title-matching is required because many DS meetings lack an activity-type.
+export const DS_TITLE_PREFIX = "Inner Circle Group Discovery Session";
+
+// Every "DS Sat - …" stage means the session was actually sat (held). Used to
+// validate sat sessions from the associated deal rather than trusting the raw
+// meeting outcome. Consultants are paid on sat sessions, so this must be exact.
+export const DS_SAT_STAGES = [
+  "2400252396", // DS Sat - Follow up Required
+  "2400252397", // DS Sat - Follow Up Booked
+  "2697062899", // DS Sat - Nurture 3 month+
+  "2400252401", // DS Sat - Bronze Membership Sold
+  "2399433181", // DS Sat - Silver Membership Sold
+  "2547683827", // DS Sat - Gold Membership Sold
+  "3057158608", // DS Sat - DNQ
+  "2400252399", // DS Sat - Missed
+  "3152097752", // DS Sat - Membership Cancelled/Refund
+];
+
+// Membership-sold stages keyed by tier (for sold-this-period counting via
+// hs_v2_date_entered_<stageId>).
+export const MEMBERSHIP_SOLD_TIERS: Record<string, string> = {
+  "2400252401": "Bronze",
+  "2399433181": "Silver",
+  "2547683827": "Gold",
+  "2872614380": "Referral",
+};
+
 // Stages that represent a "won" membership (sold)
 export const MEMBERSHIP_SOLD_STAGES = [
   "2400252401", // Bronze

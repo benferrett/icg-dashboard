@@ -54,6 +54,7 @@ export interface Dashboard {
     last90: { leads: number; spend: number; cpl: number };
     total: { leads: number; spend: number; cpl: number };
   };
+  salesFunnel: SalesFunnel;
   consultants: { name: string; deals: number; dsBooked: number; sold: number }[];
   strategists: { name: string; assigned: number; sold: number; conversion: number }[];
   memberships: { bronze: number; silver: number; gold: number; total: number };
@@ -78,6 +79,41 @@ export interface Dashboard {
     byPipeline: { name: string; count: number; value: number }[];
     monthly: { month: string; value: number }[];
   };
+}
+
+export interface FunnelConsultant {
+  name: string;
+  leads: number;
+  contacted: number;
+  connected: number;
+  contactRate: number;
+  connectRate: number;
+}
+
+export interface FunnelWindow {
+  label: string;
+  start: string;
+  consultants: FunnelConsultant[];
+  totals: {
+    leads: number;
+    contacted: number;
+    connected: number;
+    contactRate: number;
+    connectRate: number;
+  };
+  dsBooked: number;
+  dsStarted: number;
+  dsSat: number;
+  membershipsSold: number;
+  membershipTiers: Record<string, number>;
+}
+
+export interface SalesFunnel {
+  ok: boolean;
+  error?: string;
+  week?: FunnelWindow;
+  month?: FunnelWindow;
+  fy?: FunnelWindow;
 }
 
 export interface MetaData {
