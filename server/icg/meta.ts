@@ -2,10 +2,30 @@
 // Returns ad spend / leads / CPL / ROAS, or a clear status object if the token is expired/missing.
 
 import { apiFetch } from "./proxy";
+import { PeriodRange } from "./period";
 
 const GRAPH = "/v21.0";
+const MEL_OFFSET_MS = 10 * 60 * 60 * 1000; // Australia/Melbourne (UTC+10)
 
-export async function metaAds() {
+// Convert a UTC ISO instant to the Melbourne calendar date (YYYY-MM-DD).
+function melDate(iso: string): string {
+  return new Date(new Date(iso).getTime() + MEL_OFFSET_MS).toISOString().slice(0, 10);
+}
+
+// Build Meta's inclusive {since, until} from our [start, end) range. `end` is
+// exclusive, so the inclusive `until` day is the day before `end` (in MEL).
+function metaTimeRange(range: PeriodRange): { since: string; until: string } {
+  const since = melDate(range.start);
+  const endMel = new Date(new Date(range.end).getTime() + MEL_OFFSET_MS);
+  endMel.setUTCDate(endMel.getUTCDate() - 1); // step back to make `until` inclusive
+  const until = endMel.toISOString().slice(0, 10);
+  // Guard: a window shorter than a day (rare) should still cover at least `since`.
+  return { since, until: until < since ? since : until };
+}
+
+export async function metaAds(range: PeriodRange) {
+  const { since, until } = metaTimeRange(range);
+  const timeRange = encodeURIComponent(JSON.stringify({ since, until }));
   try {
     // 1. Find ad accounts
     const accRes = await apiFetch(
@@ -30,7 +50,7 @@ export async function metaAds() {
       accounts.map(async (acc: any) => {
         const insRes = await apiFetch(
           "meta",
-          `${GRAPH}/act_${acc.account_id}/insights?fields=spend,impressions,clicks,cpc,ctr,actions,cost_per_action_type&date_preset=last_30d`,
+          `${GRAPH}/act_${acc.account_id}/insights?fields=spend,impressions,clicks,cpc,ctr,actions,cost_per_action_type&time_range=${timeRange}`,
         );
         const insJson: any = await insRes.json();
         const row = (insJson.data && insJson.data[0]) || {};
@@ -70,7 +90,7 @@ export async function metaAds() {
 
     return {
       status: "ok",
-      window: "Last 30 days",
+      window: range.label,
       accounts: results,
       totals: {
         ...totals,

@@ -109,8 +109,8 @@ export default function DashboardPage({
     queryFn: () => apiGet<Dashboard>(`/api/dashboard?period=${period}`, token),
   });
   const meta = useQuery<MetaData>({
-    queryKey: ["/api/meta"],
-    queryFn: () => apiGet<MetaData>("/api/meta", token),
+    queryKey: ["/api/meta", period],
+    queryFn: () => apiGet<MetaData>(`/api/meta?period=${period}`, token),
   });
 
   // Surface auth failures by logging out
@@ -127,7 +127,7 @@ export default function DashboardPage({
     setRefreshing(true);
     await Promise.all([
       apiGet(`/api/dashboard?period=${period}&refresh=1`, token).catch(() => {}),
-      apiGet("/api/meta?refresh=1", token).catch(() => {}),
+      apiGet(`/api/meta?period=${period}&refresh=1`, token).catch(() => {}),
     ]);
     await Promise.all([dash.refetch(), meta.refetch()]);
     setRefreshing(false);
@@ -250,7 +250,7 @@ export default function DashboardPage({
                 testId="stat-total-deals"
               />
               <Stat
-                label="Ad spend · 30d"
+                label={`Ad spend · ${periodLabel.toLowerCase()}`}
                 value={
                   meta.data?.status === "ok" && meta.data.totals
                     ? fmtCurrency(meta.data.totals.spend, true)
@@ -721,7 +721,7 @@ export default function DashboardPage({
         </Section>
 
         {/* META ADS */}
-        <Section title="Meta ads · last 30 days" icon={<Facebook className="h-4 w-4 text-primary" />}>
+        <Section title={`Meta ads · ${periodLabel.toLowerCase()}`} icon={<Facebook className="h-4 w-4 text-primary" />}>
           {meta.isLoading ? (
             <Skeleton className="h-32 w-full" />
           ) : meta.data?.status === "ok" && meta.data.totals ? (

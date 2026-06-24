@@ -67,7 +67,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/meta", requireAuth, async (req, res) => {
     try {
       const force = req.query.refresh === "1";
-      const data = await cached("meta", metaAds, force);
+      const range = parsePeriod(req.query.period as string | undefined);
+      const data = await cached(`meta:${range.key}`, () => metaAds(range), force);
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ status: "error", message: e?.message || "Meta failed" });
