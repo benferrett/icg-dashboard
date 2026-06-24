@@ -6,7 +6,7 @@ import { buildDashboard } from "./icg/metrics";
 import { metaAds } from "./icg/meta";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
-const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "InnerCircle2026";
+const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "InnerCircle2026$$";
 const sessions = new Set<string>();
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {

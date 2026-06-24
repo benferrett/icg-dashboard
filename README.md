@@ -61,7 +61,7 @@ npm run build
 npm start                 # serves on http://localhost:5000
 ```
 
-Log in with the value of `DASHBOARD_PASSWORD` (default `InnerCircle2026`).
+Log in with the value of `DASHBOARD_PASSWORD` (default `InnerCircle2026$$`).
 
 ---
 
