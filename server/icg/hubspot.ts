@@ -79,16 +79,32 @@ async function searchObjects(
 // --- Batch helpers (associations v4 + object batch read) ------------------
 // Plain (non-search) endpoints are not rate-limited like /search, but we still
 // route through the proxy via apiFetch.
-async function apiPost(path: string, payload: any): Promise<any> {
-  const res = await apiFetch("hubspot", path, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`HubSpot ${path} ${res.status}: ${txt.slice(0, 200)}`);
+// Batch reads against large windows occasionally hit a transient HubSpot 500
+// (INTERNAL_ERROR) or 429 on a single chunk. Retry with backoff; if the chunk
+// still fails, return null so the caller can skip it rather than aborting the
+// whole dashboard section. A dropped chunk slightly understates contacted/
+// connected counts on big windows — acceptable vs. the section erroring out.
+async function apiPostResilient(path: string, payload: any): Promise<any | null> {
+  for (let attempt = 0; attempt < 4; attempt++) {
+    try {
+      const res = await apiFetch("hubspot", path, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      if (res.ok) return res.json();
+      if (res.status === 429 || res.status >= 500) {
+        await sleep(600 * (attempt + 1));
+        continue;
+      }
+      // 4xx (other than 429) won't fix on retry.
+      const txt = await res.text();
+      throw new Error(`HubSpot ${path} ${res.status}: ${txt.slice(0, 200)}`);
+    } catch (err) {
+      if (attempt === 3) return null;
+      await sleep(600 * (attempt + 1));
+    }
   }
-  return res.json();
+  return null;
 }
 
 // Run an array of async tasks with bounded concurrency. Batch (non-search)
@@ -127,11 +143,12 @@ async function batchAssociations(
   const result: Record<string, string[]> = {};
   const chunks = chunk(ids, 100);
   const jsons = await mapLimit(chunks, 8, (c) =>
-    apiPost(`/crm/v4/associations/${fromType}/${toType}/batch/read`, {
+    apiPostResilient(`/crm/v4/associations/${fromType}/${toType}/batch/read`, {
       inputs: c.map((id) => ({ id })),
     }),
   );
   for (const json of jsons) {
+    if (!json) continue;
     for (const res of json.results || []) {
       const from = res.from?.id;
       if (!from) continue;
@@ -150,12 +167,13 @@ async function batchRead(
   const out: Record<string, Record<string, string | undefined>> = {};
   const chunks = chunk(ids, 100);
   const jsons = await mapLimit(chunks, 8, (c) =>
-    apiPost(`/crm/v3/objects/${objectType}/batch/read`, {
+    apiPostResilient(`/crm/v3/objects/${objectType}/batch/read`, {
       properties,
       inputs: c.map((id) => ({ id })),
     }),
   );
   for (const json of jsons) {
+    if (!json) continue;
     for (const r of json.results || []) out[r.id] = r.properties;
   }
   return out;
