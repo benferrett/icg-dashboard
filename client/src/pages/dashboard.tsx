@@ -41,6 +41,7 @@ import {
   AlertTriangle,
   Moon,
   Sun,
+  Layers,
 } from "lucide-react";
 import { useState, useEffect } from "react";
 
@@ -610,6 +611,55 @@ export default function DashboardPage({
               </div>
             </Card>
           )}
+        </Section>
+
+        {/* EMBR LEADS */}
+        <Section title="EMBR leads" icon={<Layers className="h-4 w-4 text-primary" />}>
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-sm font-medium">
+                Fixed-rate lead spend
+              </span>
+              <Badge variant="secondary" className="tabular-nums">
+                {d ? fmtCurrency(d.embr.cpl) : "$154"} / lead
+              </Badge>
+            </div>
+            {loading || !d ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {Array.from({ length: 4 }).map((_, i) => (
+                  <Skeleton key={i} className="h-24 rounded-lg" />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <Stat
+                  label="Spend · 7d"
+                  value={fmtCurrency(d.embr.last7.spend)}
+                  sub={`${fmtNumber(d.embr.last7.leads)} leads`}
+                  testId="embr-7"
+                  accent
+                />
+                <Stat
+                  label="Spend · 30d"
+                  value={fmtCurrency(d.embr.last30.spend)}
+                  sub={`${fmtNumber(d.embr.last30.leads)} leads`}
+                  testId="embr-30"
+                />
+                <Stat
+                  label="Spend · 90d"
+                  value={fmtCurrency(d.embr.last90.spend)}
+                  sub={`${fmtNumber(d.embr.last90.leads)} leads`}
+                  testId="embr-90"
+                />
+                <Stat
+                  label="Total to date"
+                  value={fmtCurrency(d.embr.total.spend)}
+                  sub={`${fmtNumber(d.embr.total.leads)} leads`}
+                  testId="embr-total"
+                />
+              </div>
+            )}
+          </Card>
         </Section>
 
         <footer className="text-center text-xs text-muted-foreground pt-2 pb-4">

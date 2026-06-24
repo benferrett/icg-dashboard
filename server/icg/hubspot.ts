@@ -33,10 +33,10 @@ function schedule<T>(fn: () => Promise<T>): Promise<T> {
   return run.then(fn);
 }
 
-async function searchPost(payload: any): Promise<any> {
+async function searchPost(payload: any, objectType = "deals"): Promise<any> {
   for (let attempt = 0; attempt < 4; attempt++) {
     const res = await schedule(() =>
-      apiFetch("hubspot", "/crm/v3/objects/deals/search", {
+      apiFetch("hubspot", `/crm/v3/objects/${objectType}/search`, {
         method: "POST",
         body: JSON.stringify(payload),
       }),
@@ -73,4 +73,13 @@ async function countDeals(filterGroups: any[]): Promise<number> {
   return json.total || 0;
 }
 
-export const hubspot = { searchDeals, countDeals };
+// Count contacts (e.g. EMBR leads) — total from a 1-row contact search.
+async function countContacts(filterGroups: any[]): Promise<number> {
+  const json: any = await searchPost(
+    { filterGroups, limit: 1, properties: ["email"] },
+    "contacts",
+  );
+  return json.total || 0;
+}
+
+export const hubspot = { searchDeals, countDeals, countContacts };

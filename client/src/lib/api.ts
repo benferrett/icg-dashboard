@@ -45,6 +45,13 @@ export interface Dashboard {
     trend: { date: string; count: number }[];
     sampleSize: number;
   };
+  embr: {
+    cpl: number;
+    last7: { leads: number; spend: number; cpl: number };
+    last30: { leads: number; spend: number; cpl: number };
+    last90: { leads: number; spend: number; cpl: number };
+    total: { leads: number; spend: number; cpl: number };
+  };
   consultants: { name: string; deals: number; dsBooked: number; sold: number }[];
   strategists: { name: string; assigned: number; sold: number; conversion: number }[];
   memberships: { bronze: number; silver: number; gold: number; total: number };

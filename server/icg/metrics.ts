@@ -101,6 +101,42 @@ async function marketing() {
   };
 }
 
+// ---- EMBR LEADS ------------------------------------------------------------
+// EMBR (EMBR x EasyPropertyInvestor) is a fixed-rate lead provider. Leads are
+// HubSpot contacts tagged lead_source='EMBR', billed at a contractual AUD $154
+// per lead. Spend = lead count x $154; CPL is always $154.
+const EMBR_CPL = 154;
+
+async function embrLeadsInLastDays(days: number): Promise<number> {
+  return hubspot.countContacts([
+    {
+      filters: [
+        { propertyName: "lead_source", operator: "EQ", value: "EMBR" },
+        { propertyName: "createdate", operator: "GTE", value: isoDaysAgo(days) },
+      ],
+    },
+  ]);
+}
+
+async function embr() {
+  const [leads7, leads30, leads90, leadsTotal] = await Promise.all([
+    embrLeadsInLastDays(7),
+    embrLeadsInLastDays(30),
+    embrLeadsInLastDays(90),
+    hubspot.countContacts([
+      { filters: [{ propertyName: "lead_source", operator: "EQ", value: "EMBR" }] },
+    ]),
+  ]);
+  const win = (leads: number) => ({ leads, spend: leads * EMBR_CPL, cpl: EMBR_CPL });
+  return {
+    cpl: EMBR_CPL,
+    last7: win(leads7),
+    last30: win(leads30),
+    last90: win(leads90),
+    total: win(leadsTotal),
+  };
+}
+
 // ---- CONSULTANT TEAM (booking consultants) --------------------------------
 async function consultantTeam() {
   // Pull recent consultant-pipeline deals and group by booking_consultant
@@ -280,6 +316,7 @@ export async function buildDashboard() {
   const [
     pipelines,
     mkt,
+    embrData,
     consultants,
     strategists,
     members,
@@ -288,6 +325,7 @@ export async function buildDashboard() {
   ] = await Promise.all([
     pipelineTotals(),
     marketing(),
+    embr(),
     consultantTeam(),
     strategistTeam(),
     memberships(),
@@ -299,6 +337,7 @@ export async function buildDashboard() {
     generatedAt: new Date().toISOString(),
     pipelines,
     marketing: mkt,
+    embr: embrData,
     consultants,
     strategists,
     memberships: members,
