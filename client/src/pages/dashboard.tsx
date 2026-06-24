@@ -630,6 +630,18 @@ export default function DashboardPage({
                   <Skeleton key={i} className="h-24 rounded-lg" />
                 ))}
               </div>
+            ) : d.embr.ok === false ? (
+              <div className="flex items-start gap-3 rounded-md border border-amber-500/40 p-3">
+                <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <div className="font-medium">EMBR data unavailable</div>
+                  <div className="text-muted-foreground">
+                    The HubSpot token needs the{" "}
+                    <span className="font-mono text-xs">crm.objects.contacts.read</span>{" "}
+                    scope to read EMBR leads.
+                  </div>
+                </div>
+              </div>
             ) : (
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <Stat

@@ -119,22 +119,38 @@ async function embrLeadsInLastDays(days: number): Promise<number> {
 }
 
 async function embr() {
-  const [leads7, leads30, leads90, leadsTotal] = await Promise.all([
-    embrLeadsInLastDays(7),
-    embrLeadsInLastDays(30),
-    embrLeadsInLastDays(90),
-    hubspot.countContacts([
-      { filters: [{ propertyName: "lead_source", operator: "EQ", value: "EMBR" }] },
-    ]),
-  ]);
   const win = (leads: number) => ({ leads, spend: leads * EMBR_CPL, cpl: EMBR_CPL });
-  return {
-    cpl: EMBR_CPL,
-    last7: win(leads7),
-    last30: win(leads30),
-    last90: win(leads90),
-    total: win(leadsTotal),
-  };
+  try {
+    const [leads7, leads30, leads90, leadsTotal] = await Promise.all([
+      embrLeadsInLastDays(7),
+      embrLeadsInLastDays(30),
+      embrLeadsInLastDays(90),
+      hubspot.countContacts([
+        { filters: [{ propertyName: "lead_source", operator: "EQ", value: "EMBR" }] },
+      ]),
+    ]);
+    return {
+      cpl: EMBR_CPL,
+      ok: true,
+      last7: win(leads7),
+      last30: win(leads30),
+      last90: win(leads90),
+      total: win(leadsTotal),
+    };
+  } catch (err: any) {
+    // EMBR leads are HubSpot contacts; if the token lacks the
+    // crm.objects.contacts.read scope this 401s. Degrade gracefully so the
+    // rest of the dashboard keeps loading instead of failing entirely.
+    return {
+      cpl: EMBR_CPL,
+      ok: false,
+      error: err?.message || "EMBR data unavailable",
+      last7: win(0),
+      last30: win(0),
+      last90: win(0),
+      total: win(0),
+    };
+  }
 }
 
 // ---- CONSULTANT TEAM (booking consultants) --------------------------------

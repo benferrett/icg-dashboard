@@ -47,6 +47,8 @@ export interface Dashboard {
   };
   embr: {
     cpl: number;
+    ok: boolean;
+    error?: string;
     last7: { leads: number; spend: number; cpl: number };
     last30: { leads: number; spend: number; cpl: number };
     last90: { leads: number; spend: number; cpl: number };
