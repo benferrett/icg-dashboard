@@ -522,6 +522,10 @@ async function contracts(range: PeriodRange) {
     "hubspot_owner_id",
     "createdate",
     "hs_lastmodifieddate",
+    // Deal-card strategist fields (primary attribution source). `strategist`
+    // holds the strategist's owner ID; `strategist_assigned` is a text label.
+    "strategist",
+    "strategist_assigned",
   ];
 
   // Pull Contract pipeline + both settlement pipelines in one search (OR groups).
@@ -537,33 +541,57 @@ async function contracts(range: PeriodRange) {
     1000,
   );
 
-  // --- Strategist attribution via the associated CLIENT CONTACT's owner -----
-  // Contract/settlement deals are owned by the contract team (Raul Garcia), so
-  // we derive the strategist from each deal's associated contact. When a deal
-  // has multiple contacts we prefer one whose owner is a known strategist.
+  // --- Strategist attribution -----------------------------------------------
+  // Source of truth = the deal card's `strategist` field (an owner ID). It is
+  // populated by the team on the contract record itself, so it's the most
+  // reliable signal. When that's blank we fall back to the associated CLIENT
+  // CONTACT's owner (contract deals are owned by the contract team, not the
+  // strategist), and finally to `strategist_assigned` text. The dashboard's
+  // `owner` then falls back to deal owner / "Unattributed".
   const dealIds = deals.map((d) => d.id);
   const dealStrategist: Record<string, string> = {};
-  if (dealIds.length) {
-    const assoc = await hubspot.batchAssociations("deals", "contacts", dealIds);
-    const allContactIds = Array.from(
-      new Set(Object.values(assoc).flat()),
-    );
-    const contactOwners = allContactIds.length
+
+  // Only do the (slower) contact-association lookup for deals missing the
+  // strategist field, to keep this fast.
+  const needContactLookup = deals
+    .filter((d) => !(d.properties as any).strategist)
+    .map((d) => d.id);
+  let assoc: Record<string, string[]> = {};
+  let contactOwners: Record<string, Record<string, string | undefined>> = {};
+  if (needContactLookup.length) {
+    assoc = await hubspot.batchAssociations("deals", "contacts", needContactLookup);
+    const allContactIds = Array.from(new Set(Object.values(assoc).flat()));
+    contactOwners = allContactIds.length
       ? await hubspot.batchRead("contacts", allContactIds, ["hubspot_owner_id"])
       : {};
-    for (const dealId of dealIds) {
-      const contactIds = assoc[dealId] || [];
-      // Prefer a contact owned by a known strategist; else first contact owner.
-      let chosenOwnerId: string | undefined;
-      for (const cid of contactIds) {
-        const oid = contactOwners[cid]?.hubspot_owner_id;
-        if (isStrategistOwner(oid)) {
-          chosenOwnerId = oid || undefined;
-          break;
-        }
-        if (!chosenOwnerId && oid) chosenOwnerId = oid;
+  }
+
+  for (const d of deals) {
+    const props = d.properties as any;
+    // 1) Deal-card strategist field (owner ID).
+    const stratId: string | undefined = props.strategist || undefined;
+    if (stratId) {
+      dealStrategist[d.id] = ownerName(stratId);
+      continue;
+    }
+    // 2) Associated client-contact owner (prefer a known strategist).
+    const contactIds = assoc[d.id] || [];
+    let chosenOwnerId: string | undefined;
+    for (const cid of contactIds) {
+      const oid = contactOwners[cid]?.hubspot_owner_id;
+      if (isStrategistOwner(oid)) {
+        chosenOwnerId = oid || undefined;
+        break;
       }
-      if (chosenOwnerId) dealStrategist[dealId] = ownerName(chosenOwnerId);
+      if (!chosenOwnerId && oid) chosenOwnerId = oid;
+    }
+    if (chosenOwnerId) {
+      dealStrategist[d.id] = ownerName(chosenOwnerId);
+      continue;
+    }
+    // 3) Text label fallback.
+    if (props.strategist_assigned) {
+      dealStrategist[d.id] = String(props.strategist_assigned);
     }
   }
 
