@@ -1,8 +1,8 @@
 // HubSpot live data service for the ICG dashboard.
-// Requests route through the credential pass-through proxy (see proxy.ts), which injects
-// the real HubSpot private-app token. We just supply the API path.
+// Requests go through apiFetch (see proxy.ts): direct Bearer auth with HUBSPOT_TOKEN
+// in production, or the Perplexity credential proxy when running in-preview.
 
-import { proxyFetch, HUBSPOT_CRED } from "./proxy";
+import { apiFetch } from "./proxy";
 
 type DealProps = Record<string, string | undefined>;
 interface Deal {
@@ -36,7 +36,7 @@ function schedule<T>(fn: () => Promise<T>): Promise<T> {
 async function searchPost(payload: any): Promise<any> {
   for (let attempt = 0; attempt < 4; attempt++) {
     const res = await schedule(() =>
-      proxyFetch(HUBSPOT_CRED(), "/crm/v3/objects/deals/search", {
+      apiFetch("hubspot", "/crm/v3/objects/deals/search", {
         method: "POST",
         body: JSON.stringify(payload),
       }),

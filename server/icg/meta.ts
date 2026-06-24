@@ -1,15 +1,15 @@
 // Meta (Facebook) Marketing API service. Uses saved credential custom-cred:graph.facebook.com.
 // Returns ad spend / leads / CPL / ROAS, or a clear status object if the token is expired/missing.
 
-import { proxyFetch, META_CRED } from "./proxy";
+import { apiFetch } from "./proxy";
 
 const GRAPH = "/v21.0";
 
 export async function metaAds() {
   try {
     // 1. Find ad accounts
-    const accRes = await proxyFetch(
-      META_CRED(),
+    const accRes = await apiFetch(
+      "meta",
       `${GRAPH}/me/adaccounts?fields=account_id,name,currency,amount_spent&limit=25`,
     );
     const accJson: any = await accRes.json();
@@ -28,8 +28,8 @@ export async function metaAds() {
     // 2. Pull last-30-day insights for each account
     const results = await Promise.all(
       accounts.map(async (acc: any) => {
-        const insRes = await proxyFetch(
-          META_CRED(),
+        const insRes = await apiFetch(
+          "meta",
           `${GRAPH}/act_${acc.account_id}/insights?fields=spend,impressions,clicks,cpc,ctr,actions,cost_per_action_type&date_preset=last_30d`,
         );
         const insJson: any = await insRes.json();
