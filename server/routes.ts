@@ -3,6 +3,7 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
 import { buildDashboard } from "./icg/metrics";
+import { parsePeriod } from "./icg/period";
 import { metaAds } from "./icg/meta";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
@@ -49,7 +50,13 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/dashboard", requireAuth, async (req, res) => {
     try {
       const force = req.query.refresh === "1";
-      const data = await cached("dashboard", buildDashboard, force);
+      // Normalise the requested period so the cache key matches a known window.
+      const periodKey = parsePeriod(req.query.period as string | undefined).key;
+      const data = await cached(
+        `dashboard:${periodKey}`,
+        () => buildDashboard(periodKey),
+        force,
+      );
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to build dashboard" });

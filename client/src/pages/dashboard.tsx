@@ -1,5 +1,12 @@
 import { useQuery } from "@tanstack/react-query";
-import { apiGet, Dashboard, MetaData, FunnelWindow } from "@/lib/api";
+import {
+  apiGet,
+  Dashboard,
+  MetaData,
+  FunnelWindow,
+  PeriodKey,
+  PERIOD_OPTIONS,
+} from "@/lib/api";
 import { fmtCurrency, fmtNumber, fmtMonth, fmtDateShort, timeAgo } from "@/lib/format";
 import { Logo } from "@/components/dashboard/Logo";
 import { Stat } from "@/components/dashboard/Stat";
@@ -8,6 +15,13 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -88,11 +102,11 @@ export default function DashboardPage({
 }) {
   const { dark, toggle } = useDarkMode();
   const [refreshing, setRefreshing] = useState(false);
-  const [funnelWin, setFunnelWin] = useState<"week" | "month" | "fy">("week");
+  const [period, setPeriod] = useState<PeriodKey>("this_week");
 
   const dash = useQuery<Dashboard>({
-    queryKey: ["/api/dashboard"],
-    queryFn: () => apiGet<Dashboard>("/api/dashboard", token),
+    queryKey: ["/api/dashboard", period],
+    queryFn: () => apiGet<Dashboard>(`/api/dashboard?period=${period}`, token),
   });
   const meta = useQuery<MetaData>({
     queryKey: ["/api/meta"],
@@ -112,7 +126,7 @@ export default function DashboardPage({
   async function refresh() {
     setRefreshing(true);
     await Promise.all([
-      apiGet("/api/dashboard?refresh=1", token).catch(() => {}),
+      apiGet(`/api/dashboard?period=${period}&refresh=1`, token).catch(() => {}),
       apiGet("/api/meta?refresh=1", token).catch(() => {}),
     ]);
     await Promise.all([dash.refetch(), meta.refetch()]);
@@ -121,6 +135,7 @@ export default function DashboardPage({
 
   const d = dash.data;
   const loading = dash.isLoading;
+  const periodLabel = d?.period.label ?? PERIOD_OPTIONS.find((p) => p.key === period)?.label ?? "";
 
   return (
     <div className="h-[100dvh] flex flex-col overflow-hidden bg-background text-foreground">
@@ -134,7 +149,19 @@ export default function DashboardPage({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <span className="hidden sm:inline text-xs text-muted-foreground tabular-nums">
+          <Select value={period} onValueChange={(v) => setPeriod(v as PeriodKey)}>
+            <SelectTrigger className="w-[140px] h-9" data-testid="select-period">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {PERIOD_OPTIONS.map((p) => (
+                <SelectItem key={p.key} value={p.key} data-testid={`period-${p.key}`}>
+                  {p.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <span className="hidden md:inline text-xs text-muted-foreground tabular-nums">
             {d ? `Updated ${timeAgo(d.generatedAt)}` : "Loading…"}
           </span>
           <Button
@@ -181,16 +208,27 @@ export default function DashboardPage({
           ) : d ? (
             <>
               <Stat
-                label="New leads · 7d"
-                value={fmtNumber(d.marketing.newLeads7)}
+                label={`New leads · ${periodLabel.toLowerCase()}`}
+                value={fmtNumber(d.marketing.periodLeads)}
                 sub={`${fmtNumber(d.marketing.newLeads30)} in 30d`}
                 testId="stat-leads7"
                 accent
               />
               <Stat
-                label="Memberships sold"
-                value={fmtNumber(d.memberships.total)}
-                sub={`${d.memberships.gold}G · ${d.memberships.silver}S · ${d.memberships.bronze}B`}
+                label={`Memberships sold · ${periodLabel.toLowerCase()}`}
+                value={fmtNumber(
+                  d.salesFunnel?.ok && d.salesFunnel.window
+                    ? d.salesFunnel.window.membershipsSold
+                    : 0,
+                )}
+                sub={
+                  d.salesFunnel?.ok && d.salesFunnel.window
+                    ? Object.entries(d.salesFunnel.window.membershipTiers)
+                        .filter(([, n]) => n > 0)
+                        .map(([t, n]) => `${n}${t[0]}`)
+                        .join(" · ") || "none yet"
+                    : "—"
+                }
                 testId="stat-memberships"
               />
               <Stat
@@ -333,29 +371,10 @@ export default function DashboardPage({
             </Card>
           ) : (
             (() => {
-              const win: FunnelWindow | undefined = d.salesFunnel?.[funnelWin];
+              const win: FunnelWindow | undefined = d.salesFunnel?.window;
               if (!win) return null;
               return (
                 <div className="flex flex-col gap-4">
-                  {/* Window toggle */}
-                  <div className="flex items-center gap-1.5">
-                    {([
-                      ["week", "This week"],
-                      ["month", "This month"],
-                      ["fy", "This FY"],
-                    ] as const).map(([k, label]) => (
-                      <Button
-                        key={k}
-                        size="sm"
-                        variant={funnelWin === k ? "default" : "outline"}
-                        onClick={() => setFunnelWin(k)}
-                        data-testid={`button-funnel-${k}`}
-                      >
-                        {label}
-                      </Button>
-                    ))}
-                  </div>
-
                   {/* Funnel KPI row */}
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
                     <Stat
@@ -460,13 +479,16 @@ export default function DashboardPage({
 
         {/* CONSULTANT + STRATEGIST TEAMS */}
         <div className="grid lg:grid-cols-2 gap-8">
-          <Section title="Consultant team" icon={<Users className="h-4 w-4 text-primary" />}>
+          <Section
+            title={`Consultant team · ${periodLabel.toLowerCase()}`}
+            icon={<Users className="h-4 w-4 text-primary" />}
+          >
             <Card className="overflow-hidden">
               <Table>
                 <TableHeader>
                   <TableRow>
                     <TableHead>Consultant</TableHead>
-                    <TableHead className="text-right">Leads · 90d</TableHead>
+                    <TableHead className="text-right">Leads</TableHead>
                     <TableHead className="text-right">DS booked</TableHead>
                     <TableHead className="text-right">Sold</TableHead>
                   </TableRow>
@@ -493,7 +515,10 @@ export default function DashboardPage({
             </Card>
           </Section>
 
-          <Section title="Strategist team" icon={<Target className="h-4 w-4 text-primary" />}>
+          <Section
+            title={`Strategist team · ${periodLabel.toLowerCase()}`}
+            icon={<Target className="h-4 w-4 text-primary" />}
+          >
             <Card className="overflow-hidden">
               <Table>
                 <TableHeader>

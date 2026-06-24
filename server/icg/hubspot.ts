@@ -91,6 +91,33 @@ async function apiPost(path: string, payload: any): Promise<any> {
   return res.json();
 }
 
+// Run an array of async tasks with bounded concurrency. Batch (non-search)
+// endpoints aren't subject to the per-second search cap, so we can fan out.
+async function mapLimit<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array(items.length);
+  let next = 0;
+  async function worker() {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]);
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return out;
+}
+
+function chunk<T>(arr: T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < arr.length; i += size) out.push(arr.slice(i, i + size));
+  return out;
+}
+
 // Map each fromId -> array of associated toObjectIds (e.g. contacts -> calls).
 async function batchAssociations(
   fromType: string,
@@ -98,12 +125,13 @@ async function batchAssociations(
   ids: string[],
 ): Promise<Record<string, string[]>> {
   const result: Record<string, string[]> = {};
-  for (let i = 0; i < ids.length; i += 100) {
-    const chunk = ids.slice(i, i + 100);
-    const json = await apiPost(
-      `/crm/v4/associations/${fromType}/${toType}/batch/read`,
-      { inputs: chunk.map((id) => ({ id })) },
-    );
+  const chunks = chunk(ids, 100);
+  const jsons = await mapLimit(chunks, 8, (c) =>
+    apiPost(`/crm/v4/associations/${fromType}/${toType}/batch/read`, {
+      inputs: c.map((id) => ({ id })),
+    }),
+  );
+  for (const json of jsons) {
     for (const res of json.results || []) {
       const from = res.from?.id;
       if (!from) continue;
@@ -120,12 +148,14 @@ async function batchRead(
   properties: string[],
 ): Promise<Record<string, Record<string, string | undefined>>> {
   const out: Record<string, Record<string, string | undefined>> = {};
-  for (let i = 0; i < ids.length; i += 100) {
-    const chunk = ids.slice(i, i + 100);
-    const json = await apiPost(`/crm/v3/objects/${objectType}/batch/read`, {
+  const chunks = chunk(ids, 100);
+  const jsons = await mapLimit(chunks, 8, (c) =>
+    apiPost(`/crm/v3/objects/${objectType}/batch/read`, {
       properties,
-      inputs: chunk.map((id) => ({ id })),
-    });
+      inputs: c.map((id) => ({ id })),
+    }),
+  );
+  for (const json of jsons) {
     for (const r of json.results || []) out[r.id] = r.properties;
   }
   return out;

@@ -30,17 +30,35 @@ export async function apiGet<T>(path: string, token: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+// --- Period selector ---
+export type PeriodKey =
+  | "this_week"
+  | "last_week"
+  | "this_month"
+  | "last_month"
+  | "this_year";
+
+export const PERIOD_OPTIONS: { key: PeriodKey; label: string }[] = [
+  { key: "this_week", label: "This Week" },
+  { key: "last_week", label: "Last Week" },
+  { key: "this_month", label: "This Month" },
+  { key: "last_month", label: "Last Month" },
+  { key: "this_year", label: "This Year" },
+];
+
 // --- Shared data types (mirror server/icg/metrics.ts) ---
 export interface Dashboard {
   generatedAt: string;
   cached: boolean;
   cacheAgeSec: number;
+  period: { key: PeriodKey; label: string; start: string; end: string };
   pipelines: { id: string; name: string; total: number }[];
   marketing: {
     newLeads7: number;
     newLeads30: number;
     newLeads90: number;
     totalDeals: number;
+    periodLeads: number;
     sources: { name: string; count: number }[];
     trend: { date: string; count: number }[];
     sampleSize: number;
@@ -93,6 +111,7 @@ export interface FunnelConsultant {
 export interface FunnelWindow {
   label: string;
   start: string;
+  end: string;
   consultants: FunnelConsultant[];
   totals: {
     leads: number;
@@ -111,9 +130,7 @@ export interface FunnelWindow {
 export interface SalesFunnel {
   ok: boolean;
   error?: string;
-  week?: FunnelWindow;
-  month?: FunnelWindow;
-  fy?: FunnelWindow;
+  window?: FunnelWindow;
 }
 
 export interface MetaData {

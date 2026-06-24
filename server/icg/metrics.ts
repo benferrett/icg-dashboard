@@ -1,5 +1,6 @@
 // Aggregation logic that turns raw HubSpot deals into the dashboard's four sections.
 import { hubspot } from "./hubspot";
+import { PeriodRange, parsePeriod } from "./period";
 import {
   ownerName,
   pipelineName,
@@ -54,12 +55,21 @@ async function stageCount(stageId: string): Promise<number> {
 }
 
 // ---- MARKETING -------------------------------------------------------------
-async function marketing() {
-  const [last7, last30, last90, total] = await Promise.all([
+async function marketing(range: PeriodRange) {
+  const [last7, last30, last90, total, periodLeads] = await Promise.all([
     createdInLastDays(7),
     createdInLastDays(30),
     createdInLastDays(90),
     hubspot.countDeals([]),
+    // New deals created within the selected period (pivots with the selector).
+    hubspot.countDeals([
+      {
+        filters: [
+          { propertyName: "createdate", operator: "GTE", value: range.start },
+          { propertyName: "createdate", operator: "LT", value: range.end },
+        ],
+      },
+    ]),
   ]);
 
   // Source breakdown for deals created in the last 90 days (sample up to 1000)
@@ -99,6 +109,7 @@ async function marketing() {
     newLeads30: last30,
     newLeads90: last90,
     totalDeals: total,
+    periodLeads,
     sources,
     trend,
     sampleSize: recent.length,
@@ -167,32 +178,7 @@ async function embr() {
 //   5. memberships sold              (deal entered a membership-sold stage in window)
 // Consultants are paid on SAT sessions, so sat validation must be exact.
 
-const MEL_OFFSET_MS = 10 * 60 * 60 * 1000; // Australia/Melbourne (no DST in scope)
 const CONNECT_MS = 30000; // >= 30s connect threshold (hs_call_duration is in ms)
-
-// UTC ISO string of a Melbourne-local calendar boundary.
-function melBoundary(kind: "week" | "month" | "fy"): string {
-  const nowMel = new Date(Date.now() + MEL_OFFSET_MS);
-  const y = nowMel.getUTCFullYear();
-  const m = nowMel.getUTCMonth(); // 0-based
-  const d = nowMel.getUTCDate();
-  let melMidnightUtcMs: number;
-  if (kind === "week") {
-    // Monday 00:00 Melbourne. getUTCDay: 0=Sun..6=Sat -> days since Monday.
-    const dow = nowMel.getUTCDay();
-    const daysSinceMon = (dow + 6) % 7;
-    melMidnightUtcMs = Date.UTC(y, m, d - daysSinceMon, 0, 0, 0);
-  } else if (kind === "month") {
-    melMidnightUtcMs = Date.UTC(y, m, 1, 0, 0, 0);
-  } else {
-    // AU financial year starts 1 July. getUTCMonth() 6 === July.
-    const fyYear = m >= 6 ? y : y - 1;
-    melMidnightUtcMs = Date.UTC(fyYear, 6, 1, 0, 0, 0);
-  }
-  // melMidnightUtcMs was built as if Melbourne-local == UTC; subtract the offset
-  // to get the true UTC instant of that Melbourne wall-clock midnight.
-  return new Date(melMidnightUtcMs - MEL_OFFSET_MS).toISOString();
-}
 
 interface FunnelConsultant {
   name: string;
@@ -203,19 +189,24 @@ interface FunnelConsultant {
   connectRate: number;
 }
 
-// Contact funnel: new leads (contacts) created in window, split by booking
+// Contact funnel: new leads (contacts) created in [start, end), split by booking
 // consultant, with contact rate (any call) and >30s connect rate.
-async function contactFunnel(startIso: string) {
+async function contactFunnel(startIso: string, endIso: string) {
   const contacts = await hubspot.searchObjects(
     "contacts",
     {
       filterGroups: [
-        { filters: [{ propertyName: "createdate", operator: "GTE", value: startIso }] },
+        {
+          filters: [
+            { propertyName: "createdate", operator: "GTE", value: startIso },
+            { propertyName: "createdate", operator: "LT", value: endIso },
+          ],
+        },
       ],
       properties: ["hubspot_owner_id", "createdate"],
       sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
     },
-    5000,
+    20000,
   );
 
   const leadIds = contacts.map((c) => c.id);
@@ -286,12 +277,17 @@ async function contactFunnel(startIso: string) {
 // Discovery sessions: booked = DS-titled meeting created in window;
 // sat = DS meeting that has started, validated via an associated deal sitting in
 // any DS Sat-* stage (fallback: hs_meeting_outcome === "COMPLETED").
-async function discoverySessions(startIso: string, nowIso: string) {
+async function discoverySessions(startIso: string, endIso: string) {
   const meetings = await hubspot.searchObjects(
     "meetings",
     {
       filterGroups: [
-        { filters: [{ propertyName: "hs_createdate", operator: "GTE", value: startIso }] },
+        {
+          filters: [
+            { propertyName: "hs_createdate", operator: "GTE", value: startIso },
+            { propertyName: "hs_createdate", operator: "LT", value: endIso },
+          ],
+        },
       ],
       properties: [
         "hs_meeting_title",
@@ -311,10 +307,10 @@ async function discoverySessions(startIso: string, nowIso: string) {
   // Booked: DS meeting created in window.
   const booked = dsMeetings.length;
 
-  // Candidate sat: DS meeting that has already started (start_time in [start, now]).
+  // Candidate sat: DS meeting that has already started within [start, end).
   const started = dsMeetings.filter((m) => {
     const st = m.properties.hs_meeting_start_time;
-    return !!st && st >= startIso && st <= nowIso;
+    return !!st && st >= startIso && st < endIso;
   });
 
   let sat = 0;
@@ -341,7 +337,7 @@ async function discoverySessions(startIso: string, nowIso: string) {
 // Memberships sold in window: for each membership-sold stage, find deals and
 // count those that ENTERED the stage within the window. hs_v2_date_entered_*
 // is NOT API-filterable (returns 400), so we filter in code.
-async function membershipsSoldSince(startIso: string) {
+async function membershipsSold(startIso: string, endIso: string) {
   const tiers: Record<string, number> = {};
   let total = 0;
   for (const [stageId, tier] of Object.entries(MEMBERSHIP_SOLD_TIERS)) {
@@ -354,12 +350,12 @@ async function membershipsSoldSince(startIso: string) {
         ],
         properties: ["dealstage", enteredProp],
       },
-      2000,
+      3000,
     );
     let count = 0;
     for (const d of deals) {
       const entered = d.properties[enteredProp];
-      if (entered && entered >= startIso) count++;
+      if (entered && entered >= startIso && entered < endIso) count++;
     }
     tiers[tier] = count;
     total += count;
@@ -370,6 +366,7 @@ async function membershipsSoldSince(startIso: string) {
 interface FunnelWindow {
   label: string;
   start: string;
+  end: string;
   consultants: FunnelConsultant[];
   totals: {
     leads: number;
@@ -385,55 +382,51 @@ interface FunnelWindow {
   membershipTiers: Record<string, number>;
 }
 
-async function salesFunnelWindow(
-  label: string,
-  start: string,
-  nowIso: string,
-): Promise<FunnelWindow> {
-  const [contact, ds, sold] = await Promise.all([
-    contactFunnel(start),
-    discoverySessions(start, nowIso),
-    membershipsSoldSince(start),
-  ]);
-  return {
-    label,
-    start,
-    consultants: contact.consultants,
-    totals: contact.totals,
-    dsBooked: ds.booked,
-    dsStarted: ds.started,
-    dsSat: ds.sat,
-    membershipsSold: sold.total,
-    membershipTiers: sold.tiers,
-  };
-}
-
-async function salesFunnel() {
+// Compute the full sales funnel for a single period range. Graceful degrade so a
+// failure here never blocks the rest of the dashboard.
+async function salesFunnel(range: PeriodRange) {
   try {
-    const nowIso = new Date().toISOString();
-    const [week, month, fy] = await Promise.all([
-      salesFunnelWindow("This Week", melBoundary("week"), nowIso),
-      salesFunnelWindow("This Month", melBoundary("month"), nowIso),
-      salesFunnelWindow("This FY", melBoundary("fy"), nowIso),
+    const [contact, ds, sold] = await Promise.all([
+      contactFunnel(range.start, range.end),
+      discoverySessions(range.start, range.end),
+      membershipsSold(range.start, range.end),
     ]);
-    return { ok: true, week, month, fy };
+    const window: FunnelWindow = {
+      label: range.label,
+      start: range.start,
+      end: range.end,
+      consultants: contact.consultants,
+      totals: contact.totals,
+      dsBooked: ds.booked,
+      dsStarted: ds.started,
+      dsSat: ds.sat,
+      membershipsSold: sold.total,
+      membershipTiers: sold.tiers,
+    };
+    return { ok: true as const, window };
   } catch (err: any) {
-    return { ok: false, error: err?.message || "Sales funnel data unavailable" };
+    return { ok: false as const, error: err?.message || "Sales funnel data unavailable" };
   }
 }
 
 // ---- CONSULTANT TEAM (booking consultants) --------------------------------
-async function consultantTeam() {
-  // Pull recent consultant-pipeline deals and group by booking_consultant
+async function consultantTeam(range: PeriodRange) {
+  // Pull consultant-pipeline deals created within the selected period and group
+  // by booking_consultant.
   const deals = await hubspot.searchDeals(
     {
       filterGroups: [
-        { filters: [{ propertyName: "createdate", operator: "GTE", value: isoDaysAgo(90) }] },
+        {
+          filters: [
+            { propertyName: "createdate", operator: "GTE", value: range.start },
+            { propertyName: "createdate", operator: "LT", value: range.end },
+          ],
+        },
       ],
       properties: ["booking_consultant", "dealstage", "hubspot_owner_id", "createdate"],
       sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
     },
-    1000,
+    5000,
   );
   const byConsultant: Record<string, { deals: number; dsBooked: number; sold: number }> = {};
   for (const d of deals) {
@@ -452,16 +445,22 @@ async function consultantTeam() {
 }
 
 // ---- STRATEGIST TEAM -------------------------------------------------------
-async function strategistTeam() {
+async function strategistTeam(range: PeriodRange) {
   const deals = await hubspot.searchDeals(
     {
       filterGroups: [
-        { filters: [{ propertyName: "strategist", operator: "HAS_PROPERTY" }] },
+        {
+          filters: [
+            { propertyName: "strategist", operator: "HAS_PROPERTY" },
+            { propertyName: "createdate", operator: "GTE", value: range.start },
+            { propertyName: "createdate", operator: "LT", value: range.end },
+          ],
+        },
       ],
       properties: ["strategist", "dealstage", "createdate"],
       sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
     },
-    1000,
+    5000,
   );
   const byStrategist: Record<string, { assigned: number; sold: number }> = {};
   for (const d of deals) {
@@ -597,7 +596,8 @@ async function financial() {
 }
 
 // ---- Top-level orchestrator ------------------------------------------------
-export async function buildDashboard() {
+export async function buildDashboard(periodKey?: string) {
+  const range = parsePeriod(periodKey);
   const [
     pipelines,
     mkt,
@@ -610,11 +610,11 @@ export async function buildDashboard() {
     fin,
   ] = await Promise.all([
     pipelineTotals(),
-    marketing(),
+    marketing(range),
     embr(),
-    salesFunnel(),
-    consultantTeam(),
-    strategistTeam(),
+    salesFunnel(range),
+    consultantTeam(range),
+    strategistTeam(range),
     memberships(),
     contracts(),
     financial(),
@@ -622,6 +622,12 @@ export async function buildDashboard() {
 
   return {
     generatedAt: new Date().toISOString(),
+    period: {
+      key: range.key,
+      label: range.label,
+      start: range.start,
+      end: range.end,
+    },
     pipelines,
     marketing: mkt,
     embr: embrData,
