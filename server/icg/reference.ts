@@ -189,6 +189,73 @@ export const MEMBERSHIP_SOLD_STAGES = [
   "2547683827", // Gold
 ];
 
+// ---- CONTRACT FUNNEL ------------------------------------------------------
+// Ben's 5-step contract funnel. Each deal counts ONCE in its CURRENT stage.
+// UC additionally includes ALL settlement-pipeline deals (see CONTRACT_UC_PIPELINES).
+// Excludes EOI Cancelled (3112795614) entirely.
+export const CONTRACT_PIPELINE = "1578114550";
+
+export const CONTRACT_FUNNEL_STEPS: { key: string; label: string; stages: string[] }[] = [
+  {
+    key: "eoi",
+    label: "EOI Received",
+    stages: [
+      "3051561412", // EOI Signed, EOI Paid
+      "2639405543", // EOI & Deposit Receipt Sent - Contract Requested
+    ],
+  },
+  {
+    key: "issued",
+    label: "Contracts Issued",
+    stages: [
+      "2639405544", // ICG Issued Contracts
+      "2639405545", // Vendor Issued Contracts
+    ],
+  },
+  {
+    key: "signed",
+    label: "Contracts Signed",
+    stages: [
+      "2639405546", // Contract Signed Awaiting Exchange
+    ],
+  },
+  {
+    key: "exchanged",
+    label: "Contracts Exchanged",
+    stages: [
+      "2639405547", // Fully Executed - Awaiting Cash Deposit
+      "2639405548", // Fully Executed - Awaiting Refi Deposit
+      "2639368657", // Fully Executed - Awaiting SMSF Deposit
+      "2639368658", // Awaiting Conditions
+    ],
+  },
+  {
+    key: "uc",
+    label: "Unconditional (UC)",
+    stages: [
+      "3113781723", // Fully Executed/Uncon - Deposit Paid
+    ],
+  },
+];
+
+// Settlement pipelines: ANY deal in these counts as UC.
+export const CONTRACT_UC_PIPELINES = [
+  "1814691263", // Land and 1 Part Settlement
+  "1841864138", // 2 Part - Construction
+];
+
+// Stage explicitly excluded from the contract funnel (lost / cancelled).
+export const CONTRACT_EXCLUDE_STAGES = ["3112795614"]; // EOI Cancelled
+
+// Map every contract-funnel stage id -> funnel step key, for fast lookup.
+export const CONTRACT_STAGE_TO_STEP: Record<string, string> = (() => {
+  const m: Record<string, string> = {};
+  for (const step of CONTRACT_FUNNEL_STEPS) {
+    for (const s of step.stages) m[s] = step.key;
+  }
+  return m;
+})();
+
 export const SOURCE_LABELS: Record<string, string> = {
   ORGANIC_SEARCH: "Organic Search",
   PAID_SEARCH: "Paid Search",

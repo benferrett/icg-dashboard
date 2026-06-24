@@ -559,88 +559,160 @@ export default function DashboardPage({
           </Section>
         </div>
 
-        {/* CONTRACTS / STATUS */}
-        <Section title="Contracts & status" icon={<FileSignature className="h-4 w-4 text-primary" />}>
-          <div className="grid lg:grid-cols-3 gap-4">
-            <Card className="p-4">
-              <span className="text-sm font-medium">Contract status</span>
-              <div className="mt-3 flex flex-col gap-2.5">
-                {loading || !d
-                  ? Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)
-                  : d.contracts.contractStatus.map((s, i) => {
-                      const max = d.contracts.contractStatus[0]?.count || 1;
-                      return (
-                        <div key={s.name} className="flex flex-col gap-1">
+        {/* CONTRACTS FUNNEL */}
+        <Section
+          title={`Contracts · ${periodLabel.toLowerCase()}`}
+          icon={<FileSignature className="h-4 w-4 text-primary" />}
+        >
+          {loading || !d ? (
+            <Skeleton className="h-64 w-full" />
+          ) : (
+            (() => {
+              const c = d.contracts;
+              const maxStep = Math.max(1, ...c.funnel.map((f) => f.count));
+              return (
+                <div className="flex flex-col gap-4">
+                  {/* Funnel step KPI strip */}
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-3">
+                    {c.funnel.map((f, i) => (
+                      <Stat
+                        key={f.key}
+                        label={f.label}
+                        value={fmtNumber(f.count)}
+                        sub={f.value ? fmtCurrency(f.value, true) : "—"}
+                        testId={`contract-step-${f.key}`}
+                        accent={f.key === "uc"}
+                      />
+                    ))}
+                  </div>
+
+                  {/* Visual funnel bars */}
+                  <Card className="p-4">
+                    <span className="text-sm font-medium">
+                      Contract funnel · deals entered this period
+                    </span>
+                    <div className="mt-3 flex flex-col gap-2.5">
+                      {c.funnel.map((f, i) => (
+                        <div key={f.key} className="flex flex-col gap-1">
                           <div className="flex items-center justify-between text-xs">
-                            <span className="truncate">{s.name}</span>
-                            <span className="tabular-nums text-muted-foreground">{s.count}</span>
+                            <span className="truncate">{f.label}</span>
+                            <span className="tabular-nums text-muted-foreground">
+                              {fmtNumber(f.count)}
+                            </span>
                           </div>
-                          <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                          <div className="h-2 rounded-full bg-muted overflow-hidden">
                             <div
                               className="h-full rounded-full"
                               style={{
-                                width: `${(s.count / max) * 100}%`,
+                                width: `${(f.count / maxStep) * 100}%`,
                                 background: CHART_COLORS[i % CHART_COLORS.length],
                               }}
                             />
                           </div>
                         </div>
-                      );
-                    })}
-              </div>
-            </Card>
+                      ))}
+                    </div>
+                  </Card>
 
-            <Card className="p-4 lg:col-span-2 overflow-hidden">
-              <span className="text-sm font-medium">Recent contracts</span>
-              <div className="mt-2 -mx-4 overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Deal</TableHead>
-                      <TableHead>Stage</TableHead>
-                      <TableHead>Status</TableHead>
-                      <TableHead className="text-right">Value</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {loading || !d
-                      ? Array.from({ length: 5 }).map((_, i) => (
-                          <TableRow key={i}>
-                            <TableCell colSpan={4}>
-                              <Skeleton className="h-5 w-full" />
-                            </TableCell>
+                  {/* By strategist matrix */}
+                  <Card className="overflow-hidden">
+                    <div className="px-4 pt-4 pb-2 text-sm font-medium">
+                      By strategist · {periodLabel.toLowerCase()}
+                    </div>
+                    <div className="-mx-0 overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Strategist</TableHead>
+                            {c.steps.map((s) => (
+                              <TableHead key={s.key} className="text-right">
+                                {s.label}
+                              </TableHead>
+                            ))}
+                            <TableHead className="text-right">Total</TableHead>
                           </TableRow>
-                        ))
-                      : d.contracts.recent.map((c, i) => (
-                          <TableRow key={i} data-testid={`row-contract-${i}`}>
-                            <TableCell className="font-medium max-w-[180px] truncate">
-                              <a
-                                href={c.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="hover:text-primary hover:underline"
+                        </TableHeader>
+                        <TableBody>
+                          {c.byStrategist.length === 0 ? (
+                            <TableRow>
+                              <TableCell
+                                colSpan={c.steps.length + 2}
+                                className="text-center text-muted-foreground text-sm py-6"
                               >
-                                {c.name}
-                              </a>
-                            </TableCell>
-                            <TableCell className="max-w-[160px] truncate text-muted-foreground text-xs">
-                              {c.stage}
-                            </TableCell>
-                            <TableCell>
-                              <Badge variant="secondary" className="text-xs">
-                                {c.contractStatus}
-                              </Badge>
-                            </TableCell>
-                            <TableCell className="text-right tabular-nums">
-                              {c.amount ? fmtCurrency(c.amount, true) : "—"}
-                            </TableCell>
+                                No contract activity in this period.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            c.byStrategist.map((row) => (
+                              <TableRow key={row.name} data-testid={`row-contract-strat-${row.name}`}>
+                                <TableCell className="font-medium">{row.name}</TableCell>
+                                {c.steps.map((s) => (
+                                  <TableCell key={s.key} className="text-right tabular-nums">
+                                    {fmtNumber(Number(row[s.key] || 0))}
+                                  </TableCell>
+                                ))}
+                                <TableCell className="text-right tabular-nums font-semibold">
+                                  {fmtNumber(row.total)}
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+
+                  {/* Recent contract movements */}
+                  <Card className="p-4 overflow-hidden">
+                    <span className="text-sm font-medium">Recent movements</span>
+                    <div className="mt-2 -mx-4 overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Deal</TableHead>
+                            <TableHead>Stage</TableHead>
+                            <TableHead>Strategist</TableHead>
+                            <TableHead className="text-right">Value</TableHead>
                           </TableRow>
-                        ))}
-                  </TableBody>
-                </Table>
-              </div>
-            </Card>
-          </div>
+                        </TableHeader>
+                        <TableBody>
+                          {c.recent.length === 0 ? (
+                            <TableRow>
+                              <TableCell colSpan={4} className="text-center text-muted-foreground text-sm py-6">
+                                No contract movements in this period.
+                              </TableCell>
+                            </TableRow>
+                          ) : (
+                            c.recent.map((r, i) => (
+                              <TableRow key={i} data-testid={`row-contract-${i}`}>
+                                <TableCell className="font-medium max-w-[180px] truncate">
+                                  <a
+                                    href={r.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="hover:text-primary hover:underline"
+                                  >
+                                    {r.name}
+                                  </a>
+                                </TableCell>
+                                <TableCell className="max-w-[180px] truncate text-muted-foreground text-xs">
+                                  {r.stage}
+                                </TableCell>
+                                <TableCell className="text-xs">{r.owner}</TableCell>
+                                <TableCell className="text-right tabular-nums">
+                                  {r.amount ? fmtCurrency(r.amount, true) : "—"}
+                                </TableCell>
+                              </TableRow>
+                            ))
+                          )}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </Card>
+                </div>
+              );
+            })()
+          )}
         </Section>
 
         {/* FINANCIAL */}

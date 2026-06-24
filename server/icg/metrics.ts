@@ -14,6 +14,11 @@ import {
   DS_TITLE_PREFIX,
   DS_SAT_STAGES,
   MEMBERSHIP_SOLD_TIERS,
+  CONTRACT_PIPELINE,
+  CONTRACT_FUNNEL_STEPS,
+  CONTRACT_UC_PIPELINES,
+  CONTRACT_EXCLUDE_STAGES,
+  CONTRACT_STAGE_TO_STEP,
 } from "./reference";
 
 function isoDaysAgo(days: number): string {
@@ -491,64 +496,143 @@ async function memberships() {
   return { bronze, silver, gold, total: bronze + silver + gold };
 }
 
-// ---- CONTRACTS / FINANCIAL -------------------------------------------------
-async function contracts() {
-  // Contract pipeline deals
+// ---- CONTRACTS (5-step funnel, current-stage-only, period-pivoted) ---------
+// Ben's funnel: EOI Received -> Contracts Issued -> Contracts Signed ->
+// Contracts Exchanged -> Unconditional (UC). Each deal counts ONCE, in the
+// single step matching its CURRENT stage. UC also includes ALL settlement-
+// pipeline deals. EOI Cancelled is excluded. Period filtering uses the date the
+// deal ENTERED its current funnel step (hs_v2_date_entered_<stageId>), i.e. the
+// EOI-signed / UC date for that deal's position.
+async function contracts(range: PeriodRange) {
+  const startMs = +new Date(range.start);
+  const endMs = +new Date(range.end);
+
+  // Every entered-date property we may need to read (one per funnel stage).
+  const enteredProps = CONTRACT_FUNNEL_STEPS.flatMap((s) =>
+    s.stages.map((id) => `hs_v2_date_entered_${id}`),
+  );
+  const baseProps = [
+    "dealname",
+    "dealstage",
+    "pipeline",
+    "amount",
+    "amount_in_home_currency",
+    "closedate",
+    "hubspot_owner_id",
+    "createdate",
+    "hs_lastmodifieddate",
+  ];
+
+  // Pull Contract pipeline + both settlement pipelines in one search (OR groups).
+  const pipelineIds = [CONTRACT_PIPELINE, ...CONTRACT_UC_PIPELINES];
   const deals = await hubspot.searchDeals(
     {
-      filterGroups: [
-        { filters: [{ propertyName: "pipeline", operator: "EQ", value: "1578114550" }] },
-      ],
-      properties: [
-        "dealname",
-        "dealstage",
-        "contract_status",
-        "payment_status",
-        "amount",
-        "amount_in_home_currency",
-        "closedate",
-        "hubspot_owner_id",
-        "createdate",
-      ],
+      filterGroups: pipelineIds.map((id) => ({
+        filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
+      })),
+      properties: [...baseProps, ...enteredProps],
       sorts: [{ propertyName: "hs_lastmodifieddate", direction: "DESCENDING" }],
     },
-    500,
+    1000,
   );
 
-  const byContractStatus: Record<string, number> = {};
-  const byStage: Record<string, number> = {};
+  // step key -> { count, value, byStrategist: {name -> count} }
+  const steps: Record<string, { count: number; value: number; byStrategist: Record<string, number> }> = {};
+  for (const s of CONTRACT_FUNNEL_STEPS) {
+    steps[s.key] = { count: 0, value: 0, byStrategist: {} };
+  }
+
+  let totalInPeriod = 0;
   let pipelineValue = 0;
   const recentList: any[] = [];
 
   for (const d of deals) {
-    const cs = d.properties.contract_status || "Not Set";
-    byContractStatus[cs] = (byContractStatus[cs] || 0) + 1;
-    const st = stageName(d.properties.dealstage);
-    byStage[st] = (byStage[st] || 0) + 1;
-    pipelineValue += num(d.properties.amount_in_home_currency) || num(d.properties.amount);
-    if (recentList.length < 12) {
+    const stage = d.properties.dealstage || "";
+    if (CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
+
+    const pid = d.properties.pipeline || "";
+    const isSettlement = CONTRACT_UC_PIPELINES.includes(pid);
+
+    // Determine the funnel step for this deal's CURRENT position.
+    let stepKey: string | undefined;
+    let enteredIso: string | undefined;
+    if (isSettlement) {
+      stepKey = "uc";
+      enteredIso = d.properties.closedate || d.properties.createdate || d.properties.hs_lastmodifieddate;
+    } else {
+      stepKey = CONTRACT_STAGE_TO_STEP[stage];
+      if (!stepKey) continue; // stage not part of the funnel
+      enteredIso = (d.properties as any)[`hs_v2_date_entered_${stage}`] ||
+        d.properties.hs_lastmodifieddate || d.properties.closedate;
+    }
+    if (!stepKey) continue;
+
+    // Period filter on the step-entered (EOI-signed / UC) date.
+    if (enteredIso) {
+      const t = +new Date(enteredIso);
+      if (isNaN(t) || t < startMs || t >= endMs) continue;
+    } else {
+      continue;
+    }
+
+    const amt = num(d.properties.amount_in_home_currency) || num(d.properties.amount);
+    const owner = ownerName(d.properties.hubspot_owner_id);
+
+    const bucket = steps[stepKey];
+    bucket.count++;
+    bucket.value += amt;
+    bucket.byStrategist[owner] = (bucket.byStrategist[owner] || 0) + 1;
+
+    totalInPeriod++;
+    pipelineValue += amt;
+
+    if (recentList.length < 15) {
       recentList.push({
         name: d.properties.dealname || "Unnamed",
-        stage: st,
-        contractStatus: d.properties.contract_status || "—",
-        paymentStatus: d.properties.payment_status || "—",
-        amount: num(d.properties.amount_in_home_currency) || num(d.properties.amount),
-        owner: ownerName(d.properties.hubspot_owner_id),
+        step: stepKey,
+        stage: stageName(stage),
+        amount: amt,
+        owner,
+        date: enteredIso,
         url: `https://app.hubspot.com/contacts/442187411/record/0-3/${d.id}`,
       });
     }
   }
 
+  // Ordered funnel array.
+  const funnel = CONTRACT_FUNNEL_STEPS.map((s) => ({
+    key: s.key,
+    label: s.label,
+    count: steps[s.key].count,
+    value: steps[s.key].value,
+  }));
+
+  // By-strategist matrix: one row per strategist, a count for each step.
+  const stratSet = new Set<string>();
+  for (const s of CONTRACT_FUNNEL_STEPS) {
+    for (const name of Object.keys(steps[s.key].byStrategist)) stratSet.add(name);
+  }
+  const byStrategist = Array.from(stratSet)
+    .map((name) => {
+      const row: Record<string, any> = { name };
+      let total = 0;
+      for (const s of CONTRACT_FUNNEL_STEPS) {
+        const c = steps[s.key].byStrategist[name] || 0;
+        row[s.key] = c;
+        total += c;
+      }
+      row.total = total;
+      return row;
+    })
+    .sort((a, b) => b.total - a.total);
+
   return {
-    totalContracts: deals.length,
+    totalContracts: totalInPeriod,
     pipelineValue,
-    contractStatus: Object.entries(byContractStatus)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count),
-    byStage: Object.entries(byStage)
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count),
-    recent: recentList,
+    funnel,
+    byStrategist,
+    steps: CONTRACT_FUNNEL_STEPS.map((s) => ({ key: s.key, label: s.label })),
+    recent: recentList.sort((a, b) => +new Date(b.date) - +new Date(a.date)),
   };
 }
 
@@ -616,7 +700,7 @@ export async function buildDashboard(periodKey?: string) {
     consultantTeam(range),
     strategistTeam(range),
     memberships(),
-    contracts(),
+    contracts(range),
     financial(),
   ]);
 

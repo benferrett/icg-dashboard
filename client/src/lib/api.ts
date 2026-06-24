@@ -76,27 +76,44 @@ export interface Dashboard {
   consultants: { name: string; deals: number; dsBooked: number; sold: number }[];
   strategists: { name: string; assigned: number; sold: number; conversion: number }[];
   memberships: { bronze: number; silver: number; gold: number; total: number };
-  contracts: {
-    totalContracts: number;
-    pipelineValue: number;
-    contractStatus: { name: string; count: number }[];
-    byStage: { name: string; count: number }[];
-    recent: {
-      name: string;
-      stage: string;
-      contractStatus: string;
-      paymentStatus: string;
-      amount: number;
-      owner: string;
-      url: string;
-    }[];
-  };
+  contracts: ContractsData;
   financial: {
     totalValue: number;
     dealCount: number;
     byPipeline: { name: string; count: number; value: number }[];
     monthly: { month: string; value: number }[];
   };
+}
+
+export interface ContractStep {
+  key: string;
+  label: string;
+  count: number;
+  value: number;
+}
+
+export interface ContractStrategistRow {
+  name: string;
+  total: number;
+  // one count per funnel step key (eoi, issued, signed, exchanged, uc)
+  [stepKey: string]: number | string;
+}
+
+export interface ContractsData {
+  totalContracts: number;
+  pipelineValue: number;
+  funnel: ContractStep[];
+  byStrategist: ContractStrategistRow[];
+  steps: { key: string; label: string }[];
+  recent: {
+    name: string;
+    step: string;
+    stage: string;
+    amount: number;
+    owner: string;
+    date: string;
+    url: string;
+  }[];
 }
 
 export interface FunnelConsultant {
