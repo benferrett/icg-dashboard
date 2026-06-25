@@ -509,19 +509,34 @@ async function salesFunnel(range: PeriodRange) {
       membershipsSold: sold.total,
       membershipTiers: sold.tiers,
     };
-    return { ok: true as const, window, bookedByConsultant: ds.bookedByConsultant };
+    return {
+      ok: true as const,
+      window,
+      bookedByConsultant: ds.bookedByConsultant,
+      funnelConsultants: contact.consultants,
+    };
   } catch (err: any) {
     return { ok: false as const, error: err?.message || "Sales funnel data unavailable" };
   }
 }
 
 // ---- CONSULTANT TEAM (booking consultants) --------------------------------
+// One row per genuine BOOKING CONSULTANT (Steven Green, Moses, Akhil, Ben
+// Houghton). Strategists/contract-team are never listed here — they live in the
+// strategist table. Every column is derived from the SAME sources the headline
+// uses so the table reconciles:
+//   - Leads = the consultant's new-lead count from contactFunnel (the same
+//     figure shown in "Lead contact by consultant"; sums to headline new leads).
+//   - DS booked = the consultant's attributed DS bookings (bookedByConsultant),
+//     i.e. the same DS meetings the headline DS-booked total counts.
+//   - Sold = memberships the consultant booked, from consultant-pipeline deals
+//     in the period whose booking_consultant is this consultant.
 async function consultantTeam(
   range: PeriodRange,
   bookedByConsultant: Record<string, number> = {},
+  funnelConsultants: FunnelConsultant[] = [],
 ) {
-  // Pull consultant-pipeline deals created within the selected period and group
-  // by booking_consultant.
+  // Memberships sold per booking consultant (deals created in the period).
   const deals = await hubspot.searchDeals(
     {
       filterGroups: [
@@ -537,31 +552,34 @@ async function consultantTeam(
     },
     5000,
   );
-  const byConsultant: Record<string, { deals: number; dsBooked: number; sold: number }> = {};
-  const ensure = (key: string) => {
-    if (!byConsultant[key]) byConsultant[key] = { deals: 0, dsBooked: 0, sold: 0 };
-    return byConsultant[key];
-  };
+  const soldByConsultant: Record<string, number> = {};
   for (const d of deals) {
     const c = d.properties.booking_consultant || d.properties.hubspot_owner_id;
-    if (!c) continue;
-    const row = ensure(ownerName(c));
-    row.deals++;
-    if (MEMBERSHIP_SOLD_STAGES.includes(d.properties.dealstage || "")) row.sold++;
+    if (!c || !isBookingConsultant(c)) continue; // consultants only
+    if (MEMBERSHIP_SOLD_STAGES.includes(d.properties.dealstage || "")) {
+      const n = ownerName(c);
+      soldByConsultant[n] = (soldByConsultant[n] || 0) + 1;
+    }
   }
-  // DS booked comes from the SAME DS meetings the headline counts, attributed
-  // to the booking consultant via the meeting's associated deal/contact. This
-  // makes the per-consultant column reconcile with the headline DS-booked total
-  // (the old deal-stage snapshot under-counted because booked deals quickly
-  // move out of the "Discovery Booked" stage).
-  for (const [name, n] of Object.entries(bookedByConsultant)) {
-    if (name === "Unattributed") continue;
-    ensure(name).dsBooked += n;
+
+  // Leads per consultant come straight from the contact funnel so the figure
+  // matches "Lead contact by consultant" exactly.
+  const leadsByConsultant: Record<string, number> = {};
+  for (const fc of funnelConsultants) {
+    if (fc.name === "Other / Unassigned") continue;
+    leadsByConsultant[fc.name] = fc.leads;
   }
-  return Object.entries(byConsultant)
-    .map(([name, v]) => ({ name, ...v }))
-    .sort((a, b) => b.dsBooked - a.dsBooked || b.deals - a.deals)
-    .slice(0, 15);
+
+  // Build exactly one row per canonical booking consultant.
+  const names = Array.from(new Set(Object.values(BOOKING_CONSULTANTS)));
+  return names
+    .map((name) => ({
+      name,
+      deals: leadsByConsultant[name] || 0, // "deals" field renders as Leads
+      dsBooked: bookedByConsultant[name] || 0,
+      sold: soldByConsultant[name] || 0,
+    }))
+    .sort((a, b) => b.dsBooked - a.dsBooked || b.deals - a.deals);
 }
 
 // ---- STRATEGIST TEAM -------------------------------------------------------
@@ -1052,7 +1070,13 @@ export async function buildDashboard(periodKey?: string) {
   ]);
   const bookedByConsultant =
     funnel.ok && funnel.bookedByConsultant ? funnel.bookedByConsultant : {};
-  const consultants = await consultantTeam(range, bookedByConsultant);
+  const funnelConsultants =
+    funnel.ok && funnel.funnelConsultants ? funnel.funnelConsultants : [];
+  const consultants = await consultantTeam(
+    range,
+    bookedByConsultant,
+    funnelConsultants,
+  );
 
   return {
     generatedAt: new Date().toISOString(),
