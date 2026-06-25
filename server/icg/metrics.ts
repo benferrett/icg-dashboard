@@ -141,16 +141,31 @@ async function embrLeadsInLastDays(days: number): Promise<number> {
   ]);
 }
 
-async function embr() {
+// EMBR leads (HubSpot contacts tagged lead_source='EMBR') created within an
+// explicit period range, so the figure pivots with the global period selector.
+async function embrLeadsInRange(range: PeriodRange): Promise<number> {
+  return hubspot.countContacts([
+    {
+      filters: [
+        { propertyName: "lead_source", operator: "EQ", value: "EMBR" },
+        { propertyName: "createdate", operator: "GTE", value: range.start },
+        { propertyName: "createdate", operator: "LT", value: range.end },
+      ],
+    },
+  ]);
+}
+
+async function embr(range: PeriodRange) {
   const win = (leads: number) => ({ leads, spend: leads * EMBR_CPL, cpl: EMBR_CPL });
   try {
-    const [leads7, leads30, leads90, leadsTotal] = await Promise.all([
+    const [leads7, leads30, leads90, leadsTotal, leadsPeriod] = await Promise.all([
       embrLeadsInLastDays(7),
       embrLeadsInLastDays(30),
       embrLeadsInLastDays(90),
       hubspot.countContacts([
         { filters: [{ propertyName: "lead_source", operator: "EQ", value: "EMBR" }] },
       ]),
+      embrLeadsInRange(range),
     ]);
     return {
       cpl: EMBR_CPL,
@@ -159,6 +174,7 @@ async function embr() {
       last30: win(leads30),
       last90: win(leads90),
       total: win(leadsTotal),
+      period: win(leadsPeriod),
     };
   } catch (err: any) {
     // EMBR leads are HubSpot contacts; if the token lacks the
@@ -172,6 +188,7 @@ async function embr() {
       last30: win(0),
       last90: win(0),
       total: win(0),
+      period: win(0),
     };
   }
 }
@@ -871,7 +888,7 @@ export async function buildDashboard(periodKey?: string) {
   ] = await Promise.all([
     pipelineTotals(),
     marketing(range),
-    embr(),
+    embr(range),
     salesFunnel(range),
     consultantTeam(range),
     strategistTeam(range),

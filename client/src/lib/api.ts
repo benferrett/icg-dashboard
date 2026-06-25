@@ -71,6 +71,7 @@ export interface Dashboard {
     last30: { leads: number; spend: number; cpl: number };
     last90: { leads: number; spend: number; cpl: number };
     total: { leads: number; spend: number; cpl: number };
+    period?: { leads: number; spend: number; cpl: number };
   };
   salesFunnel: SalesFunnel;
   consultants: { name: string; deals: number; dsBooked: number; sold: number }[];

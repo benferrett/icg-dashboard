@@ -202,86 +202,86 @@ export default function DashboardPage({
         )}
 
         {/* KPI ROW */}
-        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
           {loading ? (
-            Array.from({ length: 7 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-lg" />)
+            Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-lg" />)
           ) : d ? (
-            <>
-              <Stat
-                label={`New leads · ${periodLabel.toLowerCase()}`}
-                value={fmtNumber(d.marketing.periodLeads)}
-                sub={`${fmtNumber(d.marketing.newLeads30)} in 30d`}
-                testId="stat-leads7"
-                accent
-              />
-              <Stat
-                label={`Memberships sold · ${periodLabel.toLowerCase()}`}
-                value={fmtNumber(
-                  d.salesFunnel?.ok && d.salesFunnel.window
-                    ? d.salesFunnel.window.membershipsSold
-                    : 0,
-                )}
-                sub={
-                  d.salesFunnel?.ok && d.salesFunnel.window
-                    ? Object.entries(d.salesFunnel.window.membershipTiers)
-                        .filter(([, n]) => n > 0)
-                        .map(([t, n]) => `${n}${t[0]}`)
-                        .join(" · ") || "none yet"
-                    : "—"
-                }
-                testId="stat-memberships"
-              />
-              <Stat
-                label={`EOI sales · ${periodLabel.toLowerCase()}`}
-                value={fmtNumber(
-                  d.contracts.funnel.find((s) => s.key === "eoi")?.count ?? 0,
-                )}
-                sub={fmtCurrency(
-                  d.contracts.funnel.find((s) => s.key === "eoi")?.value ?? 0,
-                  true,
-                )}
-                testId="stat-eoi-sales"
-                accent
-              />
-              <Stat
-                label={`UC sales · ${periodLabel.toLowerCase()}`}
-                value={fmtNumber(
-                  d.contracts.funnel.find((s) => s.key === "uc")?.count ?? 0,
-                )}
-                sub={fmtCurrency(
-                  d.contracts.funnel.find((s) => s.key === "uc")?.value ?? 0,
-                  true,
-                )}
-                testId="stat-uc-sales"
-                accent
-              />
-              <Stat
-                label="Active contracts"
-                value={fmtNumber(d.contracts.totalContracts)}
-                sub={fmtCurrency(d.contracts.pipelineValue, true)}
-                testId="stat-contracts"
-              />
-              <Stat
-                label="Property pipeline"
-                value={fmtCurrency(d.financial.totalValue, true)}
-                sub={`${fmtNumber(d.financial.dealCount)} deals`}
-                testId="stat-pipeline-value"
-              />
-              <Stat
-                label={`Ad spend · ${periodLabel.toLowerCase()}`}
-                value={
-                  meta.data?.status === "ok" && meta.data.totals
-                    ? fmtCurrency(meta.data.totals.spend, true)
-                    : "—"
-                }
-                sub={
-                  meta.data?.status === "ok" && meta.data.totals
-                    ? `${fmtNumber(meta.data.totals.leads)} leads`
-                    : "Meta offline"
-                }
-                testId="stat-adspend"
-              />
-            </>
+            (() => {
+              const metaOk = meta.data?.status === "ok" && !!meta.data.totals;
+              const metaLeads = metaOk ? meta.data!.totals!.leads : 0;
+              const embrLeads = d.embr?.period?.leads ?? 0;
+              const totalLeads = metaLeads + embrLeads;
+              return (
+                <>
+                  <Stat
+                    label={`Total leads · ${periodLabel.toLowerCase()}`}
+                    value={fmtNumber(totalLeads)}
+                    sub={`Meta ${metaOk ? fmtNumber(metaLeads) : "—"} · EMBR ${fmtNumber(embrLeads)}`}
+                    testId="stat-total-leads"
+                    accent
+                  />
+                  <Stat
+                    label={`DS booked · ${periodLabel.toLowerCase()}`}
+                    value={fmtNumber(
+                      d.salesFunnel?.ok && d.salesFunnel.window
+                        ? d.salesFunnel.window.dsBooked
+                        : 0,
+                    )}
+                    testId="stat-ds-booked"
+                  />
+                  <Stat
+                    label={`DS sat · ${periodLabel.toLowerCase()}`}
+                    value={fmtNumber(
+                      d.salesFunnel?.ok && d.salesFunnel.window
+                        ? d.salesFunnel.window.dsSat
+                        : 0,
+                    )}
+                    testId="stat-ds-sat"
+                  />
+                  <Stat
+                    label={`Memberships sold · ${periodLabel.toLowerCase()}`}
+                    value={fmtNumber(
+                      d.salesFunnel?.ok && d.salesFunnel.window
+                        ? d.salesFunnel.window.membershipsSold
+                        : 0,
+                    )}
+                    sub={
+                      d.salesFunnel?.ok && d.salesFunnel.window
+                        ? Object.entries(d.salesFunnel.window.membershipTiers)
+                            .filter(([, n]) => n > 0)
+                            .map(([t, n]) => `${n}${t[0]}`)
+                            .join(" · ") || "none yet"
+                        : "—"
+                    }
+                    testId="stat-memberships"
+                  />
+                  <Stat
+                    label={`EOI · ${periodLabel.toLowerCase()}`}
+                    value={fmtNumber(
+                      d.contracts.funnel.find((s) => s.key === "eoi")?.count ?? 0,
+                    )}
+                    sub={fmtCurrency(
+                      d.contracts.funnel.find((s) => s.key === "eoi")?.value ?? 0,
+                      true,
+                    )}
+                    testId="stat-eoi-sales"
+                    accent
+                  />
+                  <Stat
+                    label={`UC sales · ${periodLabel.toLowerCase()}`}
+                    value={fmtNumber(
+                      d.contracts.funnel.find((s) => s.key === "uc")?.count ?? 0,
+                    )}
+                    sub={fmtCurrency(
+                      d.contracts.funnel.find((s) => s.key === "uc")?.value ?? 0,
+                      true,
+                    )}
+                    testId="stat-uc-sales"
+                    accent
+                  />
+                </>
+              );
+            })()
           ) : null}
         </div>
 
