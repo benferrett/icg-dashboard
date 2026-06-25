@@ -202,9 +202,9 @@ export default function DashboardPage({
         )}
 
         {/* KPI ROW */}
-        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+        <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
           {loading ? (
-            Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-lg" />)
+            Array.from({ length: 7 }).map((_, i) => <Skeleton key={i} className="h-24 rounded-lg" />)
           ) : d ? (
             <>
               <Stat
@@ -232,6 +232,30 @@ export default function DashboardPage({
                 testId="stat-memberships"
               />
               <Stat
+                label={`EOI sales · ${periodLabel.toLowerCase()}`}
+                value={fmtNumber(
+                  d.contracts.funnel.find((s) => s.key === "eoi")?.count ?? 0,
+                )}
+                sub={fmtCurrency(
+                  d.contracts.funnel.find((s) => s.key === "eoi")?.value ?? 0,
+                  true,
+                )}
+                testId="stat-eoi-sales"
+                accent
+              />
+              <Stat
+                label={`UC sales · ${periodLabel.toLowerCase()}`}
+                value={fmtNumber(
+                  d.contracts.funnel.find((s) => s.key === "uc")?.count ?? 0,
+                )}
+                sub={fmtCurrency(
+                  d.contracts.funnel.find((s) => s.key === "uc")?.value ?? 0,
+                  true,
+                )}
+                testId="stat-uc-sales"
+                accent
+              />
+              <Stat
                 label="Active contracts"
                 value={fmtNumber(d.contracts.totalContracts)}
                 sub={fmtCurrency(d.contracts.pipelineValue, true)}
@@ -242,12 +266,6 @@ export default function DashboardPage({
                 value={fmtCurrency(d.financial.totalValue, true)}
                 sub={`${fmtNumber(d.financial.dealCount)} deals`}
                 testId="stat-pipeline-value"
-              />
-              <Stat
-                label="Total deals"
-                value={fmtNumber(d.marketing.totalDeals)}
-                sub="all-time"
-                testId="stat-total-deals"
               />
               <Stat
                 label={`Ad spend · ${periodLabel.toLowerCase()}`}
