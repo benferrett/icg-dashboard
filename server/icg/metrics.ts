@@ -442,9 +442,14 @@ async function discoverySessions(startIso: string, endIso: string) {
 
 // Memberships sold in window: for each membership-sold stage, find deals and
 // count those that ENTERED the stage within the window. hs_v2_date_entered_*
-// is NOT API-filterable (returns 400), so we filter in code.
+// is NOT API-filterable (returns 400), so we filter in code. Also returns a
+// per-strategist breakdown (by the deal's `strategist` field) so the strategist
+// table's "Sold" column uses the SAME definition as this headline figure and
+// ties out to it (deals with no strategist set fall into the headline total but
+// not into any strategist row).
 async function membershipsSold(startIso: string, endIso: string) {
   const tiers: Record<string, number> = {};
+  const byStrategist: Record<string, number> = {};
   let total = 0;
   for (const [stageId, tier] of Object.entries(MEMBERSHIP_SOLD_TIERS)) {
     const enteredProp = `hs_v2_date_entered_${stageId}`;
@@ -454,19 +459,26 @@ async function membershipsSold(startIso: string, endIso: string) {
         filterGroups: [
           { filters: [{ propertyName: "dealstage", operator: "EQ", value: stageId }] },
         ],
-        properties: ["dealstage", enteredProp],
+        properties: ["dealstage", enteredProp, "strategist"],
       },
       3000,
     );
     let count = 0;
     for (const d of deals) {
       const entered = d.properties[enteredProp];
-      if (entered && entered >= startIso && entered < endIso) count++;
+      if (entered && entered >= startIso && entered < endIso) {
+        count++;
+        const s = d.properties.strategist;
+        if (s) {
+          const key = ownerName(s);
+          byStrategist[key] = (byStrategist[key] || 0) + 1;
+        }
+      }
     }
     tiers[tier] = count;
     total += count;
   }
-  return { total, tiers };
+  return { total, tiers, byStrategist };
 }
 
 interface FunnelWindow {
@@ -514,6 +526,7 @@ async function salesFunnel(range: PeriodRange) {
       window,
       bookedByConsultant: ds.bookedByConsultant,
       funnelConsultants: contact.consultants,
+      soldByStrategist: sold.byStrategist,
     };
   } catch (err: any) {
     return { ok: false as const, error: err?.message || "Sales funnel data unavailable" };
@@ -583,7 +596,15 @@ async function consultantTeam(
 }
 
 // ---- STRATEGIST TEAM -------------------------------------------------------
-async function strategistTeam(range: PeriodRange) {
+// `assigned` = DS/membership deals assigned to the strategist in the period.
+// `sold` = memberships SOLD in the period attributed to the strategist, using
+// the SAME definition as the headline Memberships-sold card (deal entered a
+// sold stage within the period), passed in via `soldByStrategist`. This makes
+// the strategist Sold column tie out to the headline figure.
+async function strategistTeam(
+  range: PeriodRange,
+  soldByStrategist: Record<string, number> = {},
+) {
   const deals = await hubspot.searchDeals(
     {
       filterGroups: [
@@ -600,22 +621,30 @@ async function strategistTeam(range: PeriodRange) {
     },
     5000,
   );
-  const byStrategist: Record<string, { assigned: number; sold: number }> = {};
+  const byStrategist: Record<string, { assigned: number }> = {};
   for (const d of deals) {
     const s = d.properties.strategist;
     if (!s) continue;
     const key = ownerName(s);
-    if (!byStrategist[key]) byStrategist[key] = { assigned: 0, sold: 0 };
+    if (!byStrategist[key]) byStrategist[key] = { assigned: 0 };
     byStrategist[key].assigned++;
-    if (MEMBERSHIP_SOLD_STAGES.includes(d.properties.dealstage || "")) byStrategist[key].sold++;
+  }
+  // Make sure strategists who sold in the period appear even if they had no new
+  // deals assigned in the same period.
+  for (const name of Object.keys(soldByStrategist)) {
+    if (!byStrategist[name]) byStrategist[name] = { assigned: 0 };
   }
   return Object.entries(byStrategist)
-    .map(([name, v]) => ({
-      name,
-      ...v,
-      conversion: v.assigned ? Math.round((v.sold / v.assigned) * 100) : 0,
-    }))
-    .sort((a, b) => b.assigned - a.assigned)
+    .map(([name, v]) => {
+      const sold = soldByStrategist[name] || 0;
+      return {
+        name,
+        assigned: v.assigned,
+        sold,
+        conversion: v.assigned ? Math.round((sold / v.assigned) * 100) : 0,
+      };
+    })
+    .sort((a, b) => b.sold - a.sold || b.assigned - a.assigned)
     .slice(0, 15);
 }
 
@@ -1054,7 +1083,6 @@ export async function buildDashboard(periodKey?: string) {
     mkt,
     embrData,
     funnel,
-    strategists,
     members,
     contractData,
     fin,
@@ -1063,7 +1091,6 @@ export async function buildDashboard(periodKey?: string) {
     marketing(range),
     embr(range),
     salesFunnel(range),
-    strategistTeam(range),
     memberships(),
     contracts(range),
     financial(),
@@ -1072,11 +1099,16 @@ export async function buildDashboard(periodKey?: string) {
     funnel.ok && funnel.bookedByConsultant ? funnel.bookedByConsultant : {};
   const funnelConsultants =
     funnel.ok && funnel.funnelConsultants ? funnel.funnelConsultants : [];
-  const consultants = await consultantTeam(
-    range,
-    bookedByConsultant,
-    funnelConsultants,
-  );
+  const soldByStrategist =
+    funnel.ok && funnel.soldByStrategist ? funnel.soldByStrategist : {};
+  // consultantTeam and strategistTeam both depend on figures resolved inside
+  // salesFunnel (DS attribution, lead counts, memberships-sold breakdown), so
+  // they run after the funnel resolves — ensuring every team column ties out to
+  // the headline cards.
+  const [consultants, strategists] = await Promise.all([
+    consultantTeam(range, bookedByConsultant, funnelConsultants),
+    strategistTeam(range, soldByStrategist),
+  ]);
 
   return {
     generatedAt: new Date().toISOString(),
