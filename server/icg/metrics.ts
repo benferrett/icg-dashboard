@@ -352,6 +352,48 @@ async function discoverySessions(startIso: string, endIso: string) {
   // Booked: DS meeting created in window.
   const booked = dsMeetings.length;
 
+  // ---- Per-consultant booking attribution ----------------------------------
+  // A DS meeting in HubSpot is OWNED by the strategist who runs the session,
+  // not the consultant who booked it. The booking consultant lives on the
+  // associated DEAL's `booking_consultant` field (fallback: associated CONTACT
+  // owner). We resolve it via associations so the per-consultant DS-booked
+  // counts reconcile with this `booked` total.
+  const bookedByConsultant: Record<string, number> = {};
+  if (dsMeetings.length) {
+    const dsIds = dsMeetings.map((m) => m.id);
+    const [dealAssoc, contactAssoc] = await Promise.all([
+      hubspot.batchAssociations("meetings", "deals", dsIds),
+      hubspot.batchAssociations("meetings", "contacts", dsIds),
+    ]);
+    const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
+    const allContactIds = Array.from(new Set(Object.values(contactAssoc).flat()));
+    const [dealProps, contactProps] = await Promise.all([
+      allDealIds.length
+        ? hubspot.batchRead("deals", allDealIds, ["booking_consultant", "hubspot_owner_id"])
+        : Promise.resolve({} as Record<string, any>),
+      allContactIds.length
+        ? hubspot.batchRead("contacts", allContactIds, ["hubspot_owner_id"])
+        : Promise.resolve({} as Record<string, any>),
+    ]);
+    for (const m of dsMeetings) {
+      let bookerId: string | undefined;
+      // 1) Associated deal's booking_consultant.
+      for (const did of dealAssoc[m.id] || []) {
+        const bc = dealProps[did]?.booking_consultant;
+        if (bc) { bookerId = bc; break; }
+      }
+      // 2) Fallback: associated contact owner.
+      if (!bookerId) {
+        for (const cid of contactAssoc[m.id] || []) {
+          const oid = contactProps[cid]?.hubspot_owner_id;
+          if (oid) { bookerId = oid; break; }
+        }
+      }
+      const name = bookerId ? ownerName(bookerId) : "Unattributed";
+      bookedByConsultant[name] = (bookedByConsultant[name] || 0) + 1;
+    }
+  }
+
   // Candidate sat: DS meeting that has already started within [start, end).
   const started = dsMeetings.filter((m) => {
     const st = m.properties.hs_meeting_start_time;
@@ -376,7 +418,7 @@ async function discoverySessions(startIso: string, endIso: string) {
     }
   }
 
-  return { booked, started: started.length, sat };
+  return { booked, started: started.length, sat, bookedByConsultant };
 }
 
 // Memberships sold in window: for each membership-sold stage, find deals and
@@ -448,14 +490,17 @@ async function salesFunnel(range: PeriodRange) {
       membershipsSold: sold.total,
       membershipTiers: sold.tiers,
     };
-    return { ok: true as const, window };
+    return { ok: true as const, window, bookedByConsultant: ds.bookedByConsultant };
   } catch (err: any) {
     return { ok: false as const, error: err?.message || "Sales funnel data unavailable" };
   }
 }
 
 // ---- CONSULTANT TEAM (booking consultants) --------------------------------
-async function consultantTeam(range: PeriodRange) {
+async function consultantTeam(
+  range: PeriodRange,
+  bookedByConsultant: Record<string, number> = {},
+) {
   // Pull consultant-pipeline deals created within the selected period and group
   // by booking_consultant.
   const deals = await hubspot.searchDeals(
@@ -474,18 +519,29 @@ async function consultantTeam(range: PeriodRange) {
     5000,
   );
   const byConsultant: Record<string, { deals: number; dsBooked: number; sold: number }> = {};
+  const ensure = (key: string) => {
+    if (!byConsultant[key]) byConsultant[key] = { deals: 0, dsBooked: 0, sold: 0 };
+    return byConsultant[key];
+  };
   for (const d of deals) {
     const c = d.properties.booking_consultant || d.properties.hubspot_owner_id;
     if (!c) continue;
-    const key = ownerName(c);
-    if (!byConsultant[key]) byConsultant[key] = { deals: 0, dsBooked: 0, sold: 0 };
-    byConsultant[key].deals++;
-    if (d.properties.dealstage === DISCOVERY_BOOKED_STAGE) byConsultant[key].dsBooked++;
-    if (MEMBERSHIP_SOLD_STAGES.includes(d.properties.dealstage || "")) byConsultant[key].sold++;
+    const row = ensure(ownerName(c));
+    row.deals++;
+    if (MEMBERSHIP_SOLD_STAGES.includes(d.properties.dealstage || "")) row.sold++;
+  }
+  // DS booked comes from the SAME DS meetings the headline counts, attributed
+  // to the booking consultant via the meeting's associated deal/contact. This
+  // makes the per-consultant column reconcile with the headline DS-booked total
+  // (the old deal-stage snapshot under-counted because booked deals quickly
+  // move out of the "Discovery Booked" stage).
+  for (const [name, n] of Object.entries(bookedByConsultant)) {
+    if (name === "Unattributed") continue;
+    ensure(name).dsBooked += n;
   }
   return Object.entries(byConsultant)
     .map(([name, v]) => ({ name, ...v }))
-    .sort((a, b) => b.deals - a.deals)
+    .sort((a, b) => b.dsBooked - a.dsBooked || b.deals - a.deals)
     .slice(0, 15);
 }
 
@@ -953,12 +1009,14 @@ async function financial() {
 // ---- Top-level orchestrator ------------------------------------------------
 export async function buildDashboard(periodKey?: string) {
   const range = parsePeriod(periodKey);
+  // salesFunnel resolves the DS booking attribution (bookedByConsultant) that
+  // consultantTeam needs so the per-consultant DS-booked column reconciles with
+  // the headline DS-booked total. Run it first, then feed the map in.
   const [
     pipelines,
     mkt,
     embrData,
     funnel,
-    consultants,
     strategists,
     members,
     contractData,
@@ -968,12 +1026,14 @@ export async function buildDashboard(periodKey?: string) {
     marketing(range),
     embr(range),
     salesFunnel(range),
-    consultantTeam(range),
     strategistTeam(range),
     memberships(),
     contracts(range),
     financial(),
   ]);
+  const bookedByConsultant =
+    funnel.ok && funnel.bookedByConsultant ? funnel.bookedByConsultant : {};
+  const consultants = await consultantTeam(range, bookedByConsultant);
 
   return {
     generatedAt: new Date().toISOString(),
