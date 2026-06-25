@@ -543,7 +543,7 @@ export default function DashboardPage({
                   <TableRow>
                     <TableHead>Strategist</TableHead>
                     <TableHead className="text-right">Assigned</TableHead>
-                    <TableHead className="text-right">Sold</TableHead>
+                    <TableHead className="text-right">Membership Sold</TableHead>
                     <TableHead className="text-right">Conv.</TableHead>
                   </TableRow>
                 </TableHeader>
