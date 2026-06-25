@@ -7,7 +7,7 @@ import {
   PeriodKey,
   PERIOD_OPTIONS,
 } from "@/lib/api";
-import { fmtCurrency, fmtNumber, fmtMonth, fmtDateShort, timeAgo } from "@/lib/format";
+import { fmtCurrency, fmtNumber, fmtMonth, fmtDateShort, fmtDate, timeAgo } from "@/lib/format";
 import { Logo } from "@/components/dashboard/Logo";
 import { Stat } from "@/components/dashboard/Stat";
 import { Section } from "@/components/dashboard/Section";
@@ -740,10 +740,12 @@ export default function DashboardPage({
                       title,
                       rows,
                       testId,
+                      dateLabel,
                     }: {
                       title: string;
                       rows: typeof c.deals;
                       testId: string;
+                      dateLabel: string;
                     }) => (
                       <Card className="p-4 overflow-hidden">
                         <div className="flex items-center justify-between">
@@ -763,6 +765,7 @@ export default function DashboardPage({
                                 <TableHead>Deal</TableHead>
                                 <TableHead>Where it's at</TableHead>
                                 <TableHead>Strategist</TableHead>
+                                <TableHead className="whitespace-nowrap">{dateLabel}</TableHead>
                                 <TableHead className="text-right">Value</TableHead>
                               </TableRow>
                             </TableHeader>
@@ -770,7 +773,7 @@ export default function DashboardPage({
                               {rows.length === 0 ? (
                                 <TableRow>
                                   <TableCell
-                                    colSpan={4}
+                                    colSpan={5}
                                     className="text-center text-muted-foreground text-sm py-6"
                                   >
                                     None in this period.
@@ -793,6 +796,9 @@ export default function DashboardPage({
                                       {r.stage}
                                     </TableCell>
                                     <TableCell className="text-xs">{r.owner}</TableCell>
+                                    <TableCell className="text-xs tabular-nums whitespace-nowrap text-muted-foreground">
+                                      {fmtDate(r.date)}
+                                    </TableCell>
                                     <TableCell className="text-right tabular-nums">
                                       {r.amount ? fmtCurrency(r.amount, true) : "—"}
                                     </TableCell>
@@ -810,11 +816,13 @@ export default function DashboardPage({
                           title={`All EOI · ${periodLabel.toLowerCase()}`}
                           rows={eoiDeals}
                           testId="eoi"
+                          dateLabel="EOI date"
                         />
                         <DealList
                           title={`All UC · ${periodLabel.toLowerCase()}`}
                           rows={ucDeals}
                           testId="uc"
+                          dateLabel="UC date"
                         />
                         {midDeals.length > 0 && (
                           <div className="lg:col-span-2">
@@ -822,6 +830,7 @@ export default function DashboardPage({
                               title={`Between EOI and UC · ${periodLabel.toLowerCase()}`}
                               rows={midDeals}
                               testId="mid"
+                              dateLabel="Stage date"
                             />
                           </div>
                         )}

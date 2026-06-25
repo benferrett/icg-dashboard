@@ -29,6 +29,18 @@ export function fmtDateShort(iso: string): string {
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });
 }
 
+// Day + short month + 2-digit year, e.g. "5 Jun 26". Safe on bad/empty input.
+export function fmtDate(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (isNaN(+d)) return "—";
+  return d.toLocaleDateString("en-AU", {
+    day: "numeric",
+    month: "short",
+    year: "2-digit",
+  });
+}
+
 export function fmtMonth(ym: string): string {
   // ym = "2026-06"
   const [y, m] = ym.split("-");
