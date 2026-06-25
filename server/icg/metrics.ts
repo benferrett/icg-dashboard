@@ -20,6 +20,8 @@ import {
   CONTRACT_EXCLUDE_STAGES,
   CONTRACT_STAGE_TO_STEP,
   isStrategistOwner,
+  STRATEGIST_OWNERS,
+  STRATEGIST_NAME_TOKENS,
 } from "./reference";
 
 function isoDaysAgo(days: number): string {
@@ -504,6 +506,86 @@ async function memberships() {
 // pipeline deals. EOI Cancelled is excluded. Period filtering uses the date the
 // deal ENTERED its current funnel step (hs_v2_date_entered_<stageId>), i.e. the
 // EOI-signed / UC date for that deal's position.
+// Derive the handling strategist for deals that have no strategist field and no
+// strategist contact-owner, using the deal's OWN ACTIVITY. The strongest signal
+// is who CREATED the engagements (meetings/notes/calls) with the client; a
+// secondary signal is strategist names appearing in the engagement text. Both
+// only ever resolve to a genuine strategist, never a consultant or contract-team
+// member. Returns { dealId -> strategistName } for the resolved deals.
+async function strategistFromActivity(
+  dealIds: string[],
+): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  if (!dealIds.length) return out;
+
+  // engagement type -> [text props to scan] (hs_created_by is always read).
+  const ENG: Record<string, string[]> = {
+    meetings: ["hs_meeting_title", "hs_meeting_body"],
+    notes: ["hs_note_body"],
+    calls: ["hs_call_title", "hs_call_body"],
+    tasks: ["hs_task_subject", "hs_task_body"],
+  };
+
+  // Per deal: tally strategist votes from (a) engagement creators, (b) text.
+  const creatorVotes: Record<string, Record<string, number>> = {};
+  const textVotes: Record<string, Record<string, number>> = {};
+  for (const id of dealIds) {
+    creatorVotes[id] = {};
+    textVotes[id] = {};
+  }
+
+  const strip = (h?: string) =>
+    (h || "").replace(/<[^>]+>/g, " ").replace(/&nbsp;/g, " ").toLowerCase();
+
+  for (const [engType, textProps] of Object.entries(ENG)) {
+    const assoc = await hubspot.batchAssociations("deals", engType, dealIds);
+    const engIds = Array.from(new Set(Object.values(assoc).flat()));
+    if (!engIds.length) continue;
+    const engProps = await hubspot.batchRead(engType, engIds, [
+      "hs_created_by",
+      ...textProps,
+    ]);
+    for (const dealId of dealIds) {
+      for (const engId of assoc[dealId] || []) {
+        const ep = engProps[engId] as any;
+        if (!ep) continue;
+        // (a) creator vote — only if creator is a real strategist (not Ben:
+        // contract admin is sometimes created by Ben, which isn't delivery).
+        const cb = ep.hs_created_by ? String(ep.hs_created_by) : undefined;
+        if (cb && cb in STRATEGIST_OWNERS && cb !== "82710130") {
+          creatorVotes[dealId][cb] = (creatorVotes[dealId][cb] || 0) + 1;
+        }
+        // (b) text vote — strategist names mentioned in the engagement.
+        const blob = textProps.map((p) => strip(ep[p])).join(" ");
+        for (const [token, oid] of Object.entries(STRATEGIST_NAME_TOKENS)) {
+          if (blob.includes(token)) {
+            textVotes[dealId][oid] = (textVotes[dealId][oid] || 0) + 1;
+          }
+        }
+      }
+    }
+  }
+
+  const topVote = (votes: Record<string, number>): string | undefined => {
+    let best: string | undefined;
+    let bestN = 0;
+    for (const [oid, n] of Object.entries(votes)) {
+      if (n > bestN) {
+        bestN = n;
+        best = oid;
+      }
+    }
+    return best;
+  };
+
+  for (const id of dealIds) {
+    // Prefer who actually ran the engagements; fall back to text mentions.
+    const pick = topVote(creatorVotes[id]) || topVote(textVotes[id]);
+    if (pick) out[id] = ownerName(pick);
+  }
+  return out;
+}
+
 async function contracts(range: PeriodRange) {
   const startMs = +new Date(range.start);
   const endMs = +new Date(range.end);
@@ -595,8 +677,25 @@ async function contracts(range: PeriodRange) {
     // 3) Text label fallback (only if it names a real person).
     if (props.strategist_assigned) {
       dealStrategist[d.id] = String(props.strategist_assigned);
+      continue;
     }
-    // Otherwise leave unset -> resolves to "Unattributed" below.
+    // 4) Otherwise leave unset for now — resolved via deal ACTIVITY below.
+  }
+
+  // 4) Activity-based attribution: for any deal still unresolved, derive the
+  //    handling strategist from the deal's own meetings/notes/calls (who ran
+  //    them, and strategist names in the text). This makes attribution
+  //    self-healing — even deals where nobody set the strategist field get the
+  //    real strategist who delivered the deal. Only genuinely activity-less
+  //    deals (e.g. test records) remain "Unattributed".
+  const stillUnresolved = deals
+    .map((d) => d.id)
+    .filter((id) => !dealStrategist[id]);
+  if (stillUnresolved.length) {
+    const fromActivity = await strategistFromActivity(stillUnresolved);
+    for (const [id, name] of Object.entries(fromActivity)) {
+      dealStrategist[id] = name;
+    }
   }
 
   // step key -> { count, value, byStrategist: {name -> count} }

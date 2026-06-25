@@ -267,6 +267,22 @@ export function isStrategistOwner(id?: string | null): boolean {
   return !!id && id in STRATEGIST_OWNERS;
 }
 
+// Lowercased name tokens -> strategist owner id, used to derive the handling
+// strategist from a deal's ACTIVITY (meeting titles, note bodies, call titles)
+// when no strategist field / strategist contact-owner is set. Excludes Ben on
+// purpose: a Ben mention in activity text is almost always admin, not delivery.
+export const STRATEGIST_NAME_TOKENS: Record<string, string> = {
+  patrick: "362352488",
+  "van orsouw": "362352488",
+  orsouw: "362352488",
+  renee: "363222039",
+  "o'connell": "363222039",
+  oconnell: "363222039",
+  rob: "363184380",
+  gallacher: "363184380",
+  "steven mau": "361919911",
+};
+
 // Map every contract-funnel stage id -> funnel step key, for fast lookup.
 export const CONTRACT_STAGE_TO_STEP: Record<string, string> = (() => {
   const m: Record<string, string> = {};
