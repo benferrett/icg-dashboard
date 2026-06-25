@@ -292,6 +292,22 @@ export const CONTRACT_STAGE_TO_STEP: Record<string, string> = (() => {
   return m;
 })();
 
+// ---- MILESTONE STAGES (cumulative) ----------------------------------------
+// An EOI is a MILESTONE that a deal achieves: once it has entered an EOI stage
+// it counts as an EOI done, even if it has since progressed to Contracts
+// Issued / Exchanged / UC. We detect the milestone via the per-deal
+// hs_v2_date_entered_<stageId> timestamp, which HubSpot retains for every
+// stage the deal has passed through within its pipeline.
+// EOI milestone = entered either EOI stage.
+export const CONTRACT_EOI_STAGES = [
+  "3051561412", // EOI Signed, EOI Paid
+  "2639405543", // EOI & Deposit Receipt Sent - Contract Requested
+];
+
+// UC milestone = reached Unconditional. In the Contract pipeline this is the
+// 3113781723 stage; in the settlement pipelines ANY deal is already UC.
+export const CONTRACT_UC_STAGE = "3113781723";
+
 export const SOURCE_LABELS: Record<string, string> = {
   ORGANIC_SEARCH: "Organic Search",
   PAID_SEARCH: "Paid Search",

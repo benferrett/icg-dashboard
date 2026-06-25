@@ -19,6 +19,8 @@ import {
   CONTRACT_UC_PIPELINES,
   CONTRACT_EXCLUDE_STAGES,
   CONTRACT_STAGE_TO_STEP,
+  CONTRACT_EOI_STAGES,
+  CONTRACT_UC_STAGE,
   isStrategistOwner,
   STRATEGIST_OWNERS,
   STRATEGIST_NAME_TOKENS,
@@ -715,76 +717,133 @@ async function contracts(range: PeriodRange) {
     }
   }
 
+  // ---- Milestone-based classification (cumulative) -------------------------
+  // An EOI is a MILESTONE: once a deal has entered an EOI stage it is counted
+  // as an EOI done, even if it has since progressed to Contracts Issued /
+  // Exchanged / UC. Likewise UC counts every deal that has reached
+  // Unconditional. We read the per-deal hs_v2_date_entered_<stageId> timestamps
+  // (retained by HubSpot for every stage a deal passed through) to find when
+  // each milestone happened, and filter by the SELECTED PERIOD on that date.
+  //   - EOI date  = earliest EOI-stage entered date.
+  //   - UC date   = UC-stage entered date, or (settlement pipelines) closedate.
+  // The middle steps (issued / signed / exchanged) stay CURRENT-stage so the
+  // funnel bars still show where deals are right now.
+
+  const parseT = (s?: string) => {
+    if (!s) return NaN;
+    const t = +new Date(s);
+    return isNaN(t) ? NaN : t;
+  };
+  const inPeriod = (t: number) => !isNaN(t) && t >= startMs && t < endMs;
+
   // step key -> { count, value, byStrategist: {name -> count} }
   const steps: Record<string, { count: number; value: number; byStrategist: Record<string, number> }> = {};
   for (const s of CONTRACT_FUNNEL_STEPS) {
     steps[s.key] = { count: 0, value: 0, byStrategist: {} };
   }
 
-  let totalInPeriod = 0;
   let pipelineValue = 0;
-  const recentList: any[] = [];
-  // Full per-deal list (no cap) so the UI can show EVERY EOI and UC deal in the
-  // selected period, with its current stage ("where they're at").
+  // Full per-deal list (no cap) for the EOI / UC listing section. Each deal may
+  // be BOTH an EOI and a UC (it did its EOI then progressed to UC); the listing
+  // filters each table independently on eoiDate / ucDate.
   const dealList: any[] = [];
+  const periodDealIds = new Set<string>();
 
   for (const d of deals) {
-    const stage = d.properties.dealstage || "";
+    const props = d.properties as any;
+    const stage = props.dealstage || "";
     if (CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
 
-    const pid = d.properties.pipeline || "";
+    const pid = props.pipeline || "";
     const isSettlement = CONTRACT_UC_PIPELINES.includes(pid);
-
-    // Determine the funnel step for this deal's CURRENT position.
-    let stepKey: string | undefined;
-    let enteredIso: string | undefined;
-    if (isSettlement) {
-      stepKey = "uc";
-      enteredIso = d.properties.closedate || d.properties.createdate || d.properties.hs_lastmodifieddate;
-    } else {
-      stepKey = CONTRACT_STAGE_TO_STEP[stage];
-      if (!stepKey) continue; // stage not part of the funnel
-      enteredIso = (d.properties as any)[`hs_v2_date_entered_${stage}`] ||
-        d.properties.hs_lastmodifieddate || d.properties.closedate;
-    }
-    if (!stepKey) continue;
-
-    // Period filter on the step-entered (EOI-signed / UC) date.
-    if (enteredIso) {
-      const t = +new Date(enteredIso);
-      if (isNaN(t) || t < startMs || t >= endMs) continue;
-    } else {
-      continue;
-    }
-
-    const amt = num(d.properties.amount_in_home_currency) || num(d.properties.amount);
-    // Strategist comes ONLY from the resolved chain above (deal-card strategist
-    // -> strategist contact-owner -> text label). We deliberately do NOT fall
-    // back to the deal owner, because contract deals are owned by the contract
-    // team (Raul), not a strategist. Unresolved deals are "Unattributed" so
-    // they surface as needing a strategist set on the card.
     const owner = dealStrategist[d.id] || "Unattributed";
+    // Drop genuinely unattributed test/fake records (no real strategist, no
+    // client activity) so they don't inflate EOI / UC milestone counts.
+    const isFake = owner === "Unattributed";
 
-    const bucket = steps[stepKey];
-    bucket.count++;
-    bucket.value += amt;
-    bucket.byStrategist[owner] = (bucket.byStrategist[owner] || 0) + 1;
+    const amt = num(props.amount_in_home_currency) || num(props.amount);
 
-    totalInPeriod++;
-    pipelineValue += amt;
+    // --- EOI milestone date (earliest EOI-stage entered) ---
+    let eoiMs = NaN;
+    for (const sid of CONTRACT_EOI_STAGES) {
+      const t = parseT(props[`hs_v2_date_entered_${sid}`]);
+      if (!isNaN(t) && (isNaN(eoiMs) || t < eoiMs)) eoiMs = t;
+    }
+    const hasEoi = !isNaN(eoiMs);
 
-    const entry = {
-      name: d.properties.dealname || "Unnamed",
-      step: stepKey,
-      stage: stageName(stage),
-      amount: amt,
-      owner,
-      date: enteredIso,
-      url: `https://app.hubspot.com/contacts/442187411/record/0-3/${d.id}`,
-    };
-    dealList.push(entry);
-    if (recentList.length < 15) recentList.push(entry);
+    // --- UC milestone (reached Unconditional?) + date ---
+    const reachedUC = stage === CONTRACT_UC_STAGE || isSettlement;
+    let ucMs = NaN;
+    if (reachedUC) {
+      ucMs = parseT(props[`hs_v2_date_entered_${CONTRACT_UC_STAGE}`]);
+      if (isNaN(ucMs)) ucMs = parseT(props.closedate);
+      if (isNaN(ucMs)) ucMs = parseT(props.createdate);
+    }
+
+    // --- Current-stage step (for the funnel bars / middle steps) ---
+    const currentStep = isSettlement ? "uc" : CONTRACT_STAGE_TO_STEP[stage];
+
+    const eoiIso = hasEoi ? new Date(eoiMs).toISOString() : undefined;
+    const ucIso = reachedUC && !isNaN(ucMs) ? new Date(ucMs).toISOString() : undefined;
+
+    // Did this deal hit a milestone inside the selected period?
+    const eoiInPeriod = !isFake && hasEoi && inPeriod(eoiMs);
+    const ucInPeriod = !isFake && reachedUC && inPeriod(ucMs);
+
+    // --- Funnel / by-strategist counts ---
+    // EOI + UC are cumulative milestones (count if their milestone date is in
+    // the period). The middle steps are current-stage (count if the deal is in
+    // that stage now AND entered it within the period).
+    if (eoiInPeriod) {
+      steps.eoi.count++;
+      steps.eoi.value += amt;
+      steps.eoi.byStrategist[owner] = (steps.eoi.byStrategist[owner] || 0) + 1;
+    }
+    if (ucInPeriod) {
+      steps.uc.count++;
+      steps.uc.value += amt;
+      steps.uc.byStrategist[owner] = (steps.uc.byStrategist[owner] || 0) + 1;
+    }
+    if (!isFake && currentStep && currentStep !== "eoi" && currentStep !== "uc") {
+      // issued / signed / exchanged — current stage, period by entered date.
+      const enteredMs = parseT(props[`hs_v2_date_entered_${stage}`]);
+      const refMs = !isNaN(enteredMs) ? enteredMs : parseT(props.hs_lastmodifieddate);
+      if (inPeriod(refMs)) {
+        const b = steps[currentStep];
+        b.count++;
+        b.value += amt;
+        b.byStrategist[owner] = (b.byStrategist[owner] || 0) + 1;
+      }
+    }
+
+    // --- Listing entry (only if it hit EOI or UC in the period) ---
+    if (eoiInPeriod || ucInPeriod) {
+      periodDealIds.add(d.id);
+      if (!periodDealIds.has(d.id + "_counted")) {
+        pipelineValue += amt;
+        periodDealIds.add(d.id + "_counted");
+      }
+      // Primary "step" for sorting/labelling: UC if it reached UC in period,
+      // otherwise EOI. The frontend uses eoiDate / ucDate to place it in the
+      // right table(s).
+      const primaryStep = ucInPeriod ? "uc" : "eoi";
+      dealList.push({
+        name: props.dealname || "Unnamed",
+        step: primaryStep,
+        stage: stageName(stage),
+        amount: amt,
+        owner,
+        // `date` kept for backwards-compat = the primary milestone date.
+        date: ucInPeriod ? ucIso : eoiIso,
+        eoiDate: eoiInPeriod ? eoiIso : undefined,
+        ucDate: ucInPeriod ? ucIso : undefined,
+        reachedUC: ucInPeriod,
+        url: `https://app.hubspot.com/contacts/442187411/record/0-3/${d.id}`,
+      });
+    }
   }
+
+  const totalInPeriod = Array.from(periodDealIds).filter((x) => !x.endsWith("_counted")).length;
 
   // Ordered funnel array.
   const funnel = CONTRACT_FUNNEL_STEPS.map((s) => ({
@@ -813,10 +872,11 @@ async function contracts(range: PeriodRange) {
     })
     .sort((a, b) => b.total - a.total);
 
-  // Full deal list, newest first, for the detailed EOI / UC listing section.
+  // Full deal list, newest first (by primary milestone date).
   const deals_out = dealList
     .slice()
     .sort((a, b) => +new Date(b.date) - +new Date(a.date));
+  const recentList = deals_out.slice(0, 15);
 
   return {
     totalContracts: totalInPeriod,
@@ -824,7 +884,7 @@ async function contracts(range: PeriodRange) {
     funnel,
     byStrategist,
     steps: CONTRACT_FUNNEL_STEPS.map((s) => ({ key: s.key, label: s.label })),
-    recent: recentList.sort((a, b) => +new Date(b.date) - +new Date(a.date)),
+    recent: recentList,
     deals: deals_out,
   };
 }

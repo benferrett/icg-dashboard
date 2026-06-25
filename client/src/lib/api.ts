@@ -119,6 +119,11 @@ export interface ContractDeal {
   owner: string;
   date: string;
   url: string;
+  // Milestone dates (cumulative): when the deal reached EOI / UC. A deal may
+  // carry both (it did EOI then progressed to UC).
+  eoiDate?: string;
+  ucDate?: string;
+  reachedUC?: boolean;
 }
 
 export interface FunnelConsultant {

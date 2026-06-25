@@ -731,21 +731,23 @@ export default function DashboardPage({
                   {/* Full EOI + UC listings — every deal in the period, with
                       its current stage ("where they're at"). */}
                   {(() => {
-                    const eoiDeals = c.deals.filter((x) => x.step === "eoi");
-                    const ucDeals = c.deals.filter((x) => x.step === "uc");
-                    const midDeals = c.deals.filter(
-                      (x) => x.step !== "eoi" && x.step !== "uc",
-                    );
+                    // Cumulative milestone listings: a deal shows in EOI if it
+                    // reached EOI in the period (even if it's since moved on to
+                    // UC), and in UC if it reached Unconditional in the period.
+                    const eoiDeals = c.deals.filter((x) => !!x.eoiDate);
+                    const ucDeals = c.deals.filter((x) => !!x.ucDate);
                     const DealList = ({
                       title,
                       rows,
                       testId,
                       dateLabel,
+                      dateField,
                     }: {
                       title: string;
                       rows: typeof c.deals;
                       testId: string;
                       dateLabel: string;
+                      dateField: "eoiDate" | "ucDate";
                     }) => (
                       <Card className="p-4 overflow-hidden">
                         <div className="flex items-center justify-between">
@@ -801,7 +803,7 @@ export default function DashboardPage({
                                     </TableCell>
                                     <TableCell className="px-2 whitespace-nowrap">{r.owner}</TableCell>
                                     <TableCell className="px-2 tabular-nums whitespace-nowrap text-muted-foreground">
-                                      {fmtDate(r.date)}
+                                      {fmtDate((r[dateField] as string) || r.date)}
                                     </TableCell>
                                     <TableCell className="px-2 text-right tabular-nums whitespace-nowrap">
                                       {r.amount ? fmtCurrency(r.amount, true) : "—"}
@@ -821,23 +823,15 @@ export default function DashboardPage({
                           rows={eoiDeals}
                           testId="eoi"
                           dateLabel="EOI date"
+                          dateField="eoiDate"
                         />
                         <DealList
                           title={`All UC · ${periodLabel.toLowerCase()}`}
                           rows={ucDeals}
                           testId="uc"
                           dateLabel="UC date"
+                          dateField="ucDate"
                         />
-                        {midDeals.length > 0 && (
-                          <div className="lg:col-span-2">
-                            <DealList
-                              title={`Between EOI and UC · ${periodLabel.toLowerCase()}`}
-                              rows={midDeals}
-                              testId="mid"
-                              dateLabel="Stage date"
-                            />
-                          </div>
-                        )}
                       </div>
                     );
                   })()}
