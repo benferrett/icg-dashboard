@@ -639,12 +639,12 @@ async function contracts(range: PeriodRange) {
     }
 
     const amt = num(d.properties.amount_in_home_currency) || num(d.properties.amount);
-    // Strategist = associated client-contact owner; fall back to deal owner,
-    // then to "Unattributed" if neither resolves.
-    const owner =
-      dealStrategist[d.id] ||
-      ownerName(d.properties.hubspot_owner_id) ||
-      "Unattributed";
+    // Strategist comes ONLY from the resolved chain above (deal-card strategist
+    // -> strategist contact-owner -> text label). We deliberately do NOT fall
+    // back to the deal owner, because contract deals are owned by the contract
+    // team (Raul), not a strategist. Unresolved deals are "Unattributed" so
+    // they surface as needing a strategist set on the card.
+    const owner = dealStrategist[d.id] || "Unattributed";
 
     const bucket = steps[stepKey];
     bucket.count++;
