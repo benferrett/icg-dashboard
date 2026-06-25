@@ -758,15 +758,15 @@ export default function DashboardPage({
                             )}
                           </span>
                         </div>
-                        <div className="mt-2 -mx-4 overflow-x-auto">
-                          <Table>
+                        <div className="mt-2 overflow-x-auto">
+                          <Table className="text-xs">
                             <TableHeader>
                               <TableRow>
-                                <TableHead>Deal</TableHead>
-                                <TableHead>Where it's at</TableHead>
-                                <TableHead>Strategist</TableHead>
-                                <TableHead className="whitespace-nowrap">{dateLabel}</TableHead>
-                                <TableHead className="text-right">Value</TableHead>
+                                <TableHead className="px-2">Deal</TableHead>
+                                <TableHead className="px-2">Where it's at</TableHead>
+                                <TableHead className="px-2">Strategist</TableHead>
+                                <TableHead className="px-2 whitespace-nowrap">{dateLabel}</TableHead>
+                                <TableHead className="px-2 text-right">Value</TableHead>
                               </TableRow>
                             </TableHeader>
                             <TableBody>
@@ -782,24 +782,28 @@ export default function DashboardPage({
                               ) : (
                                 rows.map((r, i) => (
                                   <TableRow key={i} data-testid={`row-${testId}-${i}`}>
-                                    <TableCell className="font-medium max-w-[240px] truncate">
+                                    <TableCell className="px-2 font-medium max-w-[170px] truncate">
                                       <a
                                         href={r.url}
                                         target="_blank"
                                         rel="noreferrer"
                                         className="hover:text-primary hover:underline"
+                                        title={r.name}
                                       >
                                         {r.name}
                                       </a>
                                     </TableCell>
-                                    <TableCell className="max-w-[220px] truncate text-muted-foreground text-xs">
+                                    <TableCell
+                                      className="px-2 max-w-[150px] truncate text-muted-foreground"
+                                      title={r.stage}
+                                    >
                                       {r.stage}
                                     </TableCell>
-                                    <TableCell className="text-xs">{r.owner}</TableCell>
-                                    <TableCell className="text-xs tabular-nums whitespace-nowrap text-muted-foreground">
+                                    <TableCell className="px-2 whitespace-nowrap">{r.owner}</TableCell>
+                                    <TableCell className="px-2 tabular-nums whitespace-nowrap text-muted-foreground">
                                       {fmtDate(r.date)}
                                     </TableCell>
-                                    <TableCell className="text-right tabular-nums">
+                                    <TableCell className="px-2 text-right tabular-nums whitespace-nowrap">
                                       {r.amount ? fmtCurrency(r.amount, true) : "—"}
                                     </TableCell>
                                   </TableRow>
