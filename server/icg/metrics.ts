@@ -5,7 +5,6 @@ import {
   ownerName,
   pipelineName,
   stageName,
-  sourceLabel,
   PIPELINES,
   MEMBERSHIP_STAGES,
   MEMBERSHIP_SOLD_STAGES,
@@ -82,33 +81,52 @@ async function marketing(range: PeriodRange) {
     ]),
   ]);
 
-  // Source breakdown for deals created in the last 90 days (sample up to 1000)
+  // ---- Lead sources: META vs EMBR only --------------------------------------
+  // ICG has exactly two lead channels: Meta (paid social ads) and EMBR (a
+  // fixed-rate lead provider). Leads are HubSpot CONTACTS. EMBR leads are
+  // tagged lead_source='EMBR'; every other contact created in the period is a
+  // Meta lead. We deliberately do NOT surface HubSpot's raw analytics buckets
+  // (Offline / Direct Traffic / Unknown) — only the two real channels.
+  const [contactsInPeriod, embrInPeriod] = await Promise.all([
+    hubspot.countContacts([
+      {
+        filters: [
+          { propertyName: "createdate", operator: "GTE", value: range.start },
+          { propertyName: "createdate", operator: "LT", value: range.end },
+        ],
+      },
+    ]),
+    hubspot.countContacts([
+      {
+        filters: [
+          { propertyName: "lead_source", operator: "EQ", value: "EMBR" },
+          { propertyName: "createdate", operator: "GTE", value: range.start },
+          { propertyName: "createdate", operator: "LT", value: range.end },
+        ],
+      },
+    ]),
+  ]);
+  const metaLeadCount = Math.max(0, contactsInPeriod - embrInPeriod);
+  const sources = [
+    { name: "META", count: metaLeadCount },
+    { name: "EMBR", count: embrInPeriod },
+  ].sort((a, b) => b.count - a.count);
+
+  // Lead volume per day for last 30 days (trend) — still deal-based for the
+  // sparkline shape.
   const recent = await hubspot.searchDeals(
     {
       filterGroups: [
-        { filters: [{ propertyName: "createdate", operator: "GTE", value: isoDaysAgo(90) }] },
+        { filters: [{ propertyName: "createdate", operator: "GTE", value: isoDaysAgo(30) }] },
       ],
-      properties: ["hs_analytics_source", "createdate"],
+      properties: ["createdate"],
       sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
     },
     1000,
   );
-  const bySource: Record<string, number> = {};
-  for (const d of recent) {
-    const s = sourceLabel(d.properties.hs_analytics_source);
-    bySource[s] = (bySource[s] || 0) + 1;
-  }
-  const sources = Object.entries(bySource)
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count);
-
-  // Lead volume per day for last 30 days (trend)
-  const last30deals = recent.filter(
-    (d) => (d.properties.createdate || "") >= isoDaysAgo(30) + "T00:00:00Z",
-  );
   const byDay: Record<string, number> = {};
   for (let i = 29; i >= 0; i--) byDay[isoDaysAgo(i)] = 0;
-  for (const d of last30deals) {
+  for (const d of recent) {
     const day = (d.properties.createdate || "").slice(0, 10);
     if (day in byDay) byDay[day]++;
   }

@@ -342,7 +342,7 @@ export default function DashboardPage({
             </Card>
 
             <Card className="p-4">
-              <span className="text-sm font-medium">Lead sources · 90d</span>
+              <span className="text-sm font-medium">Lead sources · {periodLabel.toLowerCase()}</span>
               <div className="mt-3 flex flex-col gap-2.5">
                 {loading || !d
                   ? Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-6 w-full" />)
