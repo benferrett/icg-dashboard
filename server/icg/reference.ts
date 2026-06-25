@@ -251,12 +251,16 @@ export const CONTRACT_EXCLUDE_STAGES = ["3112795614"]; // EOI Cancelled
 // team (Raul Garcia), so strategist attribution for contracts must come from
 // the associated CLIENT CONTACT's owner. When a deal has multiple contacts we
 // prefer one whose owner is a known strategist.
+// Consultants (Moses, Akhil) and the contract team (Raul) are deliberately
+// EXCLUDED so they can never be credited a contract via the contact-owner
+// fallback. Ben is included because a contract may legitimately belong to him.
 export const STRATEGIST_OWNERS: Record<string, string> = {
   "362352488": "Patrick Van Orsouw",
   "363222039": "Renee O'Connell",
   "363184380": "Rob Gallacher",
   "361919911": "Steven Mau",
   "361919740": "Steven Mau",
+  "82710130": "Ben Ferrett",
 };
 
 export function isStrategistOwner(id?: string | null): boolean {

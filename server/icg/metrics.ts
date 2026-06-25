@@ -574,7 +574,11 @@ async function contracts(range: PeriodRange) {
       dealStrategist[d.id] = ownerName(stratId);
       continue;
     }
-    // 2) Associated client-contact owner (prefer a known strategist).
+    // 2) Associated client-contact owner. Only ACCEPT it if the owner is a
+    //    genuine strategist (or Ben). Consultants (Moses, Akhil) and the
+    //    contract team (Raul) must NEVER be credited a contract, so if the
+    //    contact owner isn't an allowed strategist we ignore it and let the
+    //    deal fall through to "Unattributed" (surfaces as needs-attention).
     const contactIds = assoc[d.id] || [];
     let chosenOwnerId: string | undefined;
     for (const cid of contactIds) {
@@ -583,16 +587,16 @@ async function contracts(range: PeriodRange) {
         chosenOwnerId = oid || undefined;
         break;
       }
-      if (!chosenOwnerId && oid) chosenOwnerId = oid;
     }
     if (chosenOwnerId) {
       dealStrategist[d.id] = ownerName(chosenOwnerId);
       continue;
     }
-    // 3) Text label fallback.
+    // 3) Text label fallback (only if it names a real person).
     if (props.strategist_assigned) {
       dealStrategist[d.id] = String(props.strategist_assigned);
     }
+    // Otherwise leave unset -> resolves to "Unattributed" below.
   }
 
   // step key -> { count, value, byStrategist: {name -> count} }
