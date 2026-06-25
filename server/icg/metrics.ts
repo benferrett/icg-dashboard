@@ -707,6 +707,9 @@ async function contracts(range: PeriodRange) {
   let totalInPeriod = 0;
   let pipelineValue = 0;
   const recentList: any[] = [];
+  // Full per-deal list (no cap) so the UI can show EVERY EOI and UC deal in the
+  // selected period, with its current stage ("where they're at").
+  const dealList: any[] = [];
 
   for (const d of deals) {
     const stage = d.properties.dealstage || "";
@@ -753,17 +756,17 @@ async function contracts(range: PeriodRange) {
     totalInPeriod++;
     pipelineValue += amt;
 
-    if (recentList.length < 15) {
-      recentList.push({
-        name: d.properties.dealname || "Unnamed",
-        step: stepKey,
-        stage: stageName(stage),
-        amount: amt,
-        owner,
-        date: enteredIso,
-        url: `https://app.hubspot.com/contacts/442187411/record/0-3/${d.id}`,
-      });
-    }
+    const entry = {
+      name: d.properties.dealname || "Unnamed",
+      step: stepKey,
+      stage: stageName(stage),
+      amount: amt,
+      owner,
+      date: enteredIso,
+      url: `https://app.hubspot.com/contacts/442187411/record/0-3/${d.id}`,
+    };
+    dealList.push(entry);
+    if (recentList.length < 15) recentList.push(entry);
   }
 
   // Ordered funnel array.
@@ -793,6 +796,11 @@ async function contracts(range: PeriodRange) {
     })
     .sort((a, b) => b.total - a.total);
 
+  // Full deal list, newest first, for the detailed EOI / UC listing section.
+  const deals_out = dealList
+    .slice()
+    .sort((a, b) => +new Date(b.date) - +new Date(a.date));
+
   return {
     totalContracts: totalInPeriod,
     pipelineValue,
@@ -800,6 +808,7 @@ async function contracts(range: PeriodRange) {
     byStrategist,
     steps: CONTRACT_FUNNEL_STEPS.map((s) => ({ key: s.key, label: s.label })),
     recent: recentList.sort((a, b) => +new Date(b.date) - +new Date(a.date)),
+    deals: deals_out,
   };
 }
 

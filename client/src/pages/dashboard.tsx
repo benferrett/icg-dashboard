@@ -727,6 +727,107 @@ export default function DashboardPage({
                       </Table>
                     </div>
                   </Card>
+
+                  {/* Full EOI + UC listings — every deal in the period, with
+                      its current stage ("where they're at"). */}
+                  {(() => {
+                    const eoiDeals = c.deals.filter((x) => x.step === "eoi");
+                    const ucDeals = c.deals.filter((x) => x.step === "uc");
+                    const midDeals = c.deals.filter(
+                      (x) => x.step !== "eoi" && x.step !== "uc",
+                    );
+                    const DealList = ({
+                      title,
+                      rows,
+                      testId,
+                    }: {
+                      title: string;
+                      rows: typeof c.deals;
+                      testId: string;
+                    }) => (
+                      <Card className="p-4 overflow-hidden">
+                        <div className="flex items-center justify-between">
+                          <span className="text-sm font-medium">{title}</span>
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {rows.length} deal{rows.length === 1 ? "" : "s"} ·{" "}
+                            {fmtCurrency(
+                              rows.reduce((s, r) => s + (r.amount || 0), 0),
+                              true,
+                            )}
+                          </span>
+                        </div>
+                        <div className="mt-2 -mx-4 overflow-x-auto">
+                          <Table>
+                            <TableHeader>
+                              <TableRow>
+                                <TableHead>Deal</TableHead>
+                                <TableHead>Where it's at</TableHead>
+                                <TableHead>Strategist</TableHead>
+                                <TableHead className="text-right">Value</TableHead>
+                              </TableRow>
+                            </TableHeader>
+                            <TableBody>
+                              {rows.length === 0 ? (
+                                <TableRow>
+                                  <TableCell
+                                    colSpan={4}
+                                    className="text-center text-muted-foreground text-sm py-6"
+                                  >
+                                    None in this period.
+                                  </TableCell>
+                                </TableRow>
+                              ) : (
+                                rows.map((r, i) => (
+                                  <TableRow key={i} data-testid={`row-${testId}-${i}`}>
+                                    <TableCell className="font-medium max-w-[240px] truncate">
+                                      <a
+                                        href={r.url}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="hover:text-primary hover:underline"
+                                      >
+                                        {r.name}
+                                      </a>
+                                    </TableCell>
+                                    <TableCell className="max-w-[220px] truncate text-muted-foreground text-xs">
+                                      {r.stage}
+                                    </TableCell>
+                                    <TableCell className="text-xs">{r.owner}</TableCell>
+                                    <TableCell className="text-right tabular-nums">
+                                      {r.amount ? fmtCurrency(r.amount, true) : "—"}
+                                    </TableCell>
+                                  </TableRow>
+                                ))
+                              )}
+                            </TableBody>
+                          </Table>
+                        </div>
+                      </Card>
+                    );
+                    return (
+                      <div className="grid lg:grid-cols-2 gap-4">
+                        <DealList
+                          title={`All EOI · ${periodLabel.toLowerCase()}`}
+                          rows={eoiDeals}
+                          testId="eoi"
+                        />
+                        <DealList
+                          title={`All UC · ${periodLabel.toLowerCase()}`}
+                          rows={ucDeals}
+                          testId="uc"
+                        />
+                        {midDeals.length > 0 && (
+                          <div className="lg:col-span-2">
+                            <DealList
+                              title={`Between EOI and UC · ${periodLabel.toLowerCase()}`}
+                              rows={midDeals}
+                              testId="mid"
+                            />
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </div>
               );
             })()

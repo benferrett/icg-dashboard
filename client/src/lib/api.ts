@@ -105,15 +105,19 @@ export interface ContractsData {
   funnel: ContractStep[];
   byStrategist: ContractStrategistRow[];
   steps: { key: string; label: string }[];
-  recent: {
-    name: string;
-    step: string;
-    stage: string;
-    amount: number;
-    owner: string;
-    date: string;
-    url: string;
-  }[];
+  recent: ContractDeal[];
+  // Full list of every contract deal in the selected period (no cap).
+  deals: ContractDeal[];
+}
+
+export interface ContractDeal {
+  name: string;
+  step: string;
+  stage: string;
+  amount: number;
+  owner: string;
+  date: string;
+  url: string;
 }
 
 export interface FunnelConsultant {
