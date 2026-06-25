@@ -179,6 +179,31 @@ async function batchRead(
   return out;
 }
 
+// Batch-read property HISTORY for a set of object IDs. Returns, per object,
+// each requested property's full version history (newest first), as HubSpot
+// returns it: [{ value, timestamp, sourceType, sourceId }, ...]. Used to find
+// the ORIGINAL owner of a contact before later reassignment (e.g. a DS contact
+// that was booked by a consultant but later handed to the strategist).
+async function batchReadWithHistory(
+  objectType: string,
+  ids: string[],
+  properties: string[],
+): Promise<Record<string, Record<string, Array<{ value?: string; timestamp?: string }>>>> {
+  const out: Record<string, Record<string, Array<{ value?: string; timestamp?: string }>>> = {};
+  const chunks = chunk(ids, 100);
+  const jsons = await mapLimit(chunks, 8, (c) =>
+    apiPostResilient(`/crm/v3/objects/${objectType}/batch/read`, {
+      propertiesWithHistory: properties,
+      inputs: c.map((id) => ({ id })),
+    }),
+  );
+  for (const json of jsons) {
+    if (!json) continue;
+    for (const r of json.results || []) out[r.id] = r.propertiesWithHistory || {};
+  }
+  return out;
+}
+
 // Count only (fast) — uses total from a 1-row search.
 async function countDeals(filterGroups: any[]): Promise<number> {
   const json: any = await searchPost({ filterGroups, limit: 1, properties: ["dealname"] });
@@ -201,4 +226,5 @@ export const hubspot = {
   countContacts,
   batchAssociations,
   batchRead,
+  batchReadWithHistory,
 };

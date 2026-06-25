@@ -151,6 +151,13 @@ export const BOOKING_CONSULTANTS: Record<string, string> = {
   "361455466": "Ben Houghton",
 };
 
+// True only for the booking-consultant team. Used to attribute a DS booking to
+// the genuine consultant and to REJECT strategists/contract-team owners that
+// later take over the contact (so they never appear in the consultant table).
+export function isBookingConsultant(id?: string | null): boolean {
+  return !!id && id in BOOKING_CONSULTANTS;
+}
+
 // Discovery Session meetings are titled "Inner Circle Group Discovery Session: …".
 // Title-matching is required because many DS meetings lack an activity-type.
 export const DS_TITLE_PREFIX = "Inner Circle Group Discovery Session";

@@ -10,6 +10,7 @@ import {
   MEMBERSHIP_SOLD_STAGES,
   DISCOVERY_BOOKED_STAGE,
   BOOKING_CONSULTANTS,
+  isBookingConsultant,
   DS_TITLE_PREFIX,
   DS_SAT_STAGES,
   MEMBERSHIP_SOLD_TIERS,
@@ -353,11 +354,20 @@ async function discoverySessions(startIso: string, endIso: string) {
   const booked = dsMeetings.length;
 
   // ---- Per-consultant booking attribution ----------------------------------
-  // A DS meeting in HubSpot is OWNED by the strategist who runs the session,
-  // not the consultant who booked it. The booking consultant lives on the
-  // associated DEAL's `booking_consultant` field (fallback: associated CONTACT
-  // owner). We resolve it via associations so the per-consultant DS-booked
-  // counts reconcile with this `booked` total.
+  // A DS meeting in HubSpot is OWNED by the strategist who runs the session, not
+  // the consultant who booked it. By the time the session is held, the contact &
+  // deal have usually been REASSIGNED from the booking consultant to the
+  // strategist (and the deal's `booking_consultant` field is often blank). So
+  // the current owner is unreliable. We resolve the genuine booker as:
+  //   1) the associated deal's `booking_consultant`, IF it is a booking
+  //      consultant (not a strategist who happened to be set there); else
+  //   2) the EARLIEST owner in the associated contact's owner HISTORY that is a
+  //      booking consultant (i.e. who held the lead before the strategist).
+  // If neither yields a consultant, the booking was made directly into a
+  // strategist's calendar (or is a test); we mark it "Unattributed" so a
+  // strategist never appears in the consultant table. This makes the
+  // per-consultant DS-booked column reconcile with the headline `booked` total
+  // (consultant bookings + Unattributed strategist-direct = booked).
   const bookedByConsultant: Record<string, number> = {};
   if (dsMeetings.length) {
     const dsIds = dsMeetings.map((m) => m.id);
@@ -367,28 +377,37 @@ async function discoverySessions(startIso: string, endIso: string) {
     ]);
     const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
     const allContactIds = Array.from(new Set(Object.values(contactAssoc).flat()));
-    const [dealProps, contactProps] = await Promise.all([
+    const [dealProps, contactHist] = await Promise.all([
       allDealIds.length
         ? hubspot.batchRead("deals", allDealIds, ["booking_consultant", "hubspot_owner_id"])
         : Promise.resolve({} as Record<string, any>),
       allContactIds.length
-        ? hubspot.batchRead("contacts", allContactIds, ["hubspot_owner_id"])
+        ? hubspot.batchReadWithHistory("contacts", allContactIds, ["hubspot_owner_id"])
         : Promise.resolve({} as Record<string, any>),
     ]);
     for (const m of dsMeetings) {
       let bookerId: string | undefined;
-      // 1) Associated deal's booking_consultant.
+      // 1) Associated deal's booking_consultant, only if a real consultant.
       for (const did of dealAssoc[m.id] || []) {
         const bc = dealProps[did]?.booking_consultant;
-        if (bc) { bookerId = bc; break; }
+        if (isBookingConsultant(bc)) { bookerId = bc; break; }
       }
-      // 2) Fallback: associated contact owner.
+      // 2) Earliest consultant owner in the contact's owner history.
       if (!bookerId) {
+        let bestTs: string | undefined;
         for (const cid of contactAssoc[m.id] || []) {
-          const oid = contactProps[cid]?.hubspot_owner_id;
-          if (oid) { bookerId = oid; break; }
+          const hist = contactHist[cid]?.hubspot_owner_id || [];
+          for (const h of hist) {
+            if (!isBookingConsultant(h.value)) continue;
+            if (bestTs === undefined || (h.timestamp || "") < bestTs) {
+              bestTs = h.timestamp || "";
+              bookerId = h.value;
+            }
+          }
         }
       }
+      // 3) No consultant found -> strategist-direct booking or test. Leave
+      //    Unattributed so strategists never enter the consultant table.
       const name = bookerId ? ownerName(bookerId) : "Unattributed";
       bookedByConsultant[name] = (bookedByConsultant[name] || 0) + 1;
     }
