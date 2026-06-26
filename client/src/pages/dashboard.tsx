@@ -647,14 +647,13 @@ export default function DashboardPage({
                                 {s.label}
                               </TableHead>
                             ))}
-                            <TableHead className="text-right">Total</TableHead>
                           </TableRow>
                         </TableHeader>
                         <TableBody>
                           {c.byStrategist.length === 0 ? (
                             <TableRow>
                               <TableCell
-                                colSpan={c.steps.length + 2}
+                                colSpan={c.steps.length + 1}
                                 className="text-center text-muted-foreground text-sm py-6"
                               >
                                 No contract activity in this period.
@@ -669,9 +668,6 @@ export default function DashboardPage({
                                     {fmtNumber(Number(row[s.key] || 0))}
                                   </TableCell>
                                 ))}
-                                <TableCell className="text-right tabular-nums font-semibold">
-                                  {fmtNumber(row.total)}
-                                </TableCell>
                               </TableRow>
                             ))
                           )}
