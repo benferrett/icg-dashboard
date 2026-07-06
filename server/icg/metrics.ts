@@ -12,7 +12,6 @@ import {
   BOOKING_CONSULTANTS,
   isBookingConsultant,
   DS_TITLE_PREFIX,
-  DS_SAT_STAGES,
   MEMBERSHIP_SOLD_TIERS,
   CONTRACT_PIPELINE,
   CONTRACT_FUNNEL_STEPS,
@@ -413,29 +412,23 @@ async function discoverySessions(startIso: string, endIso: string) {
     }
   }
 
-  // Candidate sat: DS meeting that has already started within [start, end).
+  // Candidate sat: DS meeting whose session time falls within [start, end).
   const started = dsMeetings.filter((m) => {
     const st = m.properties.hs_meeting_start_time;
     return !!st && st >= startIso && st < endIso;
   });
 
-  let sat = 0;
-  if (started.length) {
-    const meetingIds = started.map((m) => m.id);
-    const dealAssoc = await hubspot.batchAssociations("meetings", "deals", meetingIds);
-    const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
-    const dealProps = allDealIds.length
-      ? await hubspot.batchRead("deals", allDealIds, ["dealstage"])
-      : {};
-    for (const m of started) {
-      const deals = dealAssoc[m.id] || [];
-      const satByStage = deals.some((did) =>
-        DS_SAT_STAGES.includes(dealProps[did]?.dealstage || ""),
-      );
-      const satByOutcome = m.properties.hs_meeting_outcome === "COMPLETED";
-      if (satByStage || satByOutcome) sat++;
-    }
-  }
+  // Sat = the session was HELD. Per Ben (ICG): a session counts as sat if its
+  // time has passed and it was NOT a no-show or cancellation. The meeting
+  // outcome field is only reliably set for the negatives (NO_SHOW / CANCELED);
+  // strategists frequently leave held sessions as SCHEDULED, so we must NOT
+  // require an explicit COMPLETED. Deal-stage progression is also unreliable
+  // (DS meetings often have no associated deal at the sat stages). Therefore:
+  //   sat = started-in-window AND outcome not in {NO_SHOW, CANCELED}.
+  const NOT_SAT_OUTCOMES = new Set(["NO_SHOW", "CANCELED"]);
+  const sat = started.filter(
+    (m) => !NOT_SAT_OUTCOMES.has(m.properties.hs_meeting_outcome || ""),
+  ).length;
 
   return { booked, started: started.length, sat, bookedByConsultant };
 }
