@@ -325,6 +325,11 @@ async function contactFunnel(startIso: string, endIso: string) {
 // sitting in any DS Sat-* stage (the meeting outcome field is unreliable and is
 // NOT used — see the sat block below for the full rationale).
 async function discoverySessions(startIso: string, endIso: string) {
+  // Fetch DS meetings that were EITHER created in the window (for `booked`) OR
+  // started/held in the window (for `sat`). These two sets overlap heavily but
+  // are not identical — a session booked before the window but held inside it
+  // must be counted as sat, and a session booked inside the window but held later
+  // must be counted as booked. The two filterGroups are OR'd by HubSpot.
   const meetings = await hubspot.searchObjects(
     "meetings",
     {
@@ -333,6 +338,12 @@ async function discoverySessions(startIso: string, endIso: string) {
           filters: [
             { propertyName: "hs_createdate", operator: "GTE", value: startIso },
             { propertyName: "hs_createdate", operator: "LT", value: endIso },
+          ],
+        },
+        {
+          filters: [
+            { propertyName: "hs_meeting_start_time", operator: "GTE", value: startIso },
+            { propertyName: "hs_meeting_start_time", operator: "LT", value: endIso },
           ],
         },
       ],
@@ -351,8 +362,11 @@ async function discoverySessions(startIso: string, endIso: string) {
     (m.properties.hs_meeting_title || "").startsWith(DS_TITLE_PREFIX);
   const dsMeetings = meetings.filter(isDs);
 
-  // Booked: DS meeting created in window.
-  const booked = dsMeetings.length;
+  // Booked: DS meeting CREATED in window.
+  const booked = dsMeetings.filter((m) => {
+    const c = m.properties.hs_createdate;
+    return !!c && c >= startIso && c < endIso;
+  }).length;
 
   // ---- Per-consultant booking attribution ----------------------------------
   // A DS meeting in HubSpot is OWNED by the strategist who runs the session, not
@@ -391,7 +405,15 @@ async function discoverySessions(startIso: string, endIso: string) {
         : Promise.resolve({} as Record<string, any>),
     ]);
     dealProps = dp;
-    for (const m of dsMeetings) {
+    // Booking attribution counts a booking in the period it was CREATED, so only
+    // iterate the created-in-window subset here (the fetch also pulled held-in-
+    // window meetings that may have been created earlier — those belong to sat,
+    // not booked).
+    const bookedMeetings = dsMeetings.filter((m) => {
+      const c = m.properties.hs_createdate;
+      return !!c && c >= startIso && c < endIso;
+    });
+    for (const m of bookedMeetings) {
       let bookerId: string | undefined;
       // 1) Associated deal's booking_consultant, only if a real consultant.
       for (const did of dealAssoc[m.id] || []) {
@@ -425,21 +447,27 @@ async function discoverySessions(startIso: string, endIso: string) {
     return !!st && st >= startIso && st < endIso;
   });
 
-  // Sat = the session was actually HELD. The meeting `hs_meeting_outcome` field is
-  // NOT reliable: the team leaves most held sessions as SCHEDULED and only
-  // sometimes marks the negatives, so counting "anything not NO_SHOW/CANCELED"
-  // massively over-counts (it swept in booked-but-never-held, Missed, and
-  // No-Show/Reschedule sessions). The reliable signal is the associated deal's
-  // pipeline stage: every "DS Sat - …" stage (except the Missed no-show bucket)
-  // means the prospect turned up. So:
-  //   sat = started-in-window AND its associated deal is in a DS_SAT_STAGES stage.
-  // Consultants are paid on sat sessions, so this must be exact.
+  // Sat = the number of UNIQUE PEOPLE who attended a DS in the window. Rules,
+  // per Ben (ICG) — this is a core business stat and consultants are paid on it,
+  // so it must be exact:
+  //
+  //  1. The meeting `hs_meeting_outcome` field is NOT reliable (the team leaves
+  //     most held sessions as SCHEDULED), so we do NOT use it. Instead we validate
+  //     attendance from the associated deal's pipeline stage: a deal in any
+  //     DS_SAT_STAGES stage means the prospect sat (this includes "DS Sat - Missed",
+  //     which is a missed follow-up, not a no-show).
+  //  2. Count by when the session was HELD (started-in-window), not when created.
+  //  3. Dedupe by deal: if one prospect has two sessions in the window they missed
+  //     the first and re-sat, which is ONE sat — so we count distinct sat deals,
+  //     not raw meetings.
   const satStages = new Set(DS_SAT_STAGES);
-  const dealInSatStage = (meetingId: string) =>
-    (dealAssoc[meetingId] || []).some((did) =>
-      satStages.has(dealProps[did]?.dealstage),
-    );
-  const sat = started.filter((m) => dealInSatStage(m.id)).length;
+  const satDealIds = new Set<string>();
+  for (const m of started) {
+    for (const did of dealAssoc[m.id] || []) {
+      if (satStages.has(dealProps[did]?.dealstage)) satDealIds.add(did);
+    }
+  }
+  const sat = satDealIds.size;
 
   return { booked, started: started.length, sat, bookedByConsultant };
 }

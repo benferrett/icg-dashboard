@@ -162,15 +162,17 @@ export function isBookingConsultant(id?: string | null): boolean {
 // Title-matching is required because many DS meetings lack an activity-type.
 export const DS_TITLE_PREFIX = "Inner Circle Group Discovery Session";
 
-// A "DS Sat - …" stage means the session was actually sat (held) IF and only if
-// the prospect turned up. We validate sat sessions from the associated deal's
-// stage rather than trusting the raw meeting outcome (the team leaves most held
-// sessions as SCHEDULED, so the outcome field massively over-counts). Consultants
-// are paid on sat sessions, so this must be exact.
+// A deal in any "DS Sat - …" stage means the prospect ATTENDED (sat) the discovery
+// session. We validate sat from the associated deal's stage rather than the raw
+// meeting outcome (the team leaves most held sessions as SCHEDULED, so the outcome
+// field massively over-counts — it once produced 90 for June vs the true 68).
+// Consultants are paid on sat sessions, so this must be exact.
 //
-// IMPORTANT: "DS Sat - Missed" (2400252399) is NOT a sit despite its label — it is
-// the no-show bucket, so it is deliberately EXCLUDED here. "Discovery Session
-// Booked" and "DS No Show / To Reschedule" are likewise not sits.
+// Per Ben (ICG): "DS Sat - Missed" DOES count as a sit — the prospect attended and
+// "Missed" refers to a later follow-up, not the DS itself. The genuinely-not-sat
+// stages are "Discovery Session Booked", "DS No Show / To Reschedule",
+// "Not Interested", the consultants-pipeline "Nurture", and Referral — none of
+// which appear in this list.
 export const DS_SAT_STAGES = [
   "2400252396", // DS Sat - Follow up Required
   "2400252397", // DS Sat - Follow Up Booked
@@ -180,6 +182,7 @@ export const DS_SAT_STAGES = [
   "2547683827", // DS Sat - Gold Membership Sold
   "3057158608", // DS Sat - DNQ (they sat, then did not qualify)
   "3152097752", // DS Sat - Membership Cancelled/Refund (sat, then cancelled)
+  "2400252399", // DS Sat - Missed (they SAT; "Missed" = missed follow-up, per Ben)
 ];
 
 // Membership-sold stages keyed by tier (for sold-this-period counting via
