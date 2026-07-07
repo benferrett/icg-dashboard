@@ -9,6 +9,7 @@ import {
   MEMBERSHIP_STAGES,
   MEMBERSHIP_SOLD_STAGES,
   DISCOVERY_BOOKED_STAGE,
+  DS_SAT_STAGES,
   BOOKING_CONSULTANTS,
   isBookingConsultant,
   DS_TITLE_PREFIX,
@@ -320,8 +321,9 @@ async function contactFunnel(startIso: string, endIso: string) {
 }
 
 // Discovery sessions: booked = DS-titled meeting created in window;
-// sat = DS meeting that has started, validated via an associated deal sitting in
-// any DS Sat-* stage (fallback: hs_meeting_outcome === "COMPLETED").
+// sat = DS meeting that started in window, validated via an associated deal
+// sitting in any DS Sat-* stage (the meeting outcome field is unreliable and is
+// NOT used — see the sat block below for the full rationale).
 async function discoverySessions(startIso: string, endIso: string) {
   const meetings = await hubspot.searchObjects(
     "meetings",
@@ -368,22 +370,27 @@ async function discoverySessions(startIso: string, endIso: string) {
   // per-consultant DS-booked column reconcile with the headline `booked` total
   // (consultant bookings + Unattributed strategist-direct = booked).
   const bookedByConsultant: Record<string, number> = {};
+  // Map each DS meeting id -> associated deal ids, and each deal id -> its stage.
+  // Shared by booking attribution AND the sat calc below (sat is validated from
+  // the associated deal's pipeline stage, so we need these regardless).
+  let dealAssoc: Record<string, string[]> = {};
+  let dealProps: Record<string, any> = {};
   if (dsMeetings.length) {
     const dsIds = dsMeetings.map((m) => m.id);
-    const [dealAssoc, contactAssoc] = await Promise.all([
-      hubspot.batchAssociations("meetings", "deals", dsIds),
-      hubspot.batchAssociations("meetings", "contacts", dsIds),
-    ]);
+    const contactAssocPromise = hubspot.batchAssociations("meetings", "contacts", dsIds);
+    dealAssoc = await hubspot.batchAssociations("meetings", "deals", dsIds);
+    const contactAssoc = await contactAssocPromise;
     const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
     const allContactIds = Array.from(new Set(Object.values(contactAssoc).flat()));
-    const [dealProps, contactHist] = await Promise.all([
+    const [dp, contactHist] = await Promise.all([
       allDealIds.length
-        ? hubspot.batchRead("deals", allDealIds, ["booking_consultant", "hubspot_owner_id"])
+        ? hubspot.batchRead("deals", allDealIds, ["booking_consultant", "hubspot_owner_id", "dealstage"])
         : Promise.resolve({} as Record<string, any>),
       allContactIds.length
         ? hubspot.batchReadWithHistory("contacts", allContactIds, ["hubspot_owner_id"])
         : Promise.resolve({} as Record<string, any>),
     ]);
+    dealProps = dp;
     for (const m of dsMeetings) {
       let bookerId: string | undefined;
       // 1) Associated deal's booking_consultant, only if a real consultant.
@@ -418,17 +425,21 @@ async function discoverySessions(startIso: string, endIso: string) {
     return !!st && st >= startIso && st < endIso;
   });
 
-  // Sat = the session was HELD. Per Ben (ICG): a session counts as sat if its
-  // time has passed and it was NOT a no-show or cancellation. The meeting
-  // outcome field is only reliably set for the negatives (NO_SHOW / CANCELED);
-  // strategists frequently leave held sessions as SCHEDULED, so we must NOT
-  // require an explicit COMPLETED. Deal-stage progression is also unreliable
-  // (DS meetings often have no associated deal at the sat stages). Therefore:
-  //   sat = started-in-window AND outcome not in {NO_SHOW, CANCELED}.
-  const NOT_SAT_OUTCOMES = new Set(["NO_SHOW", "CANCELED"]);
-  const sat = started.filter(
-    (m) => !NOT_SAT_OUTCOMES.has(m.properties.hs_meeting_outcome || ""),
-  ).length;
+  // Sat = the session was actually HELD. The meeting `hs_meeting_outcome` field is
+  // NOT reliable: the team leaves most held sessions as SCHEDULED and only
+  // sometimes marks the negatives, so counting "anything not NO_SHOW/CANCELED"
+  // massively over-counts (it swept in booked-but-never-held, Missed, and
+  // No-Show/Reschedule sessions). The reliable signal is the associated deal's
+  // pipeline stage: every "DS Sat - …" stage (except the Missed no-show bucket)
+  // means the prospect turned up. So:
+  //   sat = started-in-window AND its associated deal is in a DS_SAT_STAGES stage.
+  // Consultants are paid on sat sessions, so this must be exact.
+  const satStages = new Set(DS_SAT_STAGES);
+  const dealInSatStage = (meetingId: string) =>
+    (dealAssoc[meetingId] || []).some((did) =>
+      satStages.has(dealProps[did]?.dealstage),
+    );
+  const sat = started.filter((m) => dealInSatStage(m.id)).length;
 
   return { booked, started: started.length, sat, bookedByConsultant };
 }
