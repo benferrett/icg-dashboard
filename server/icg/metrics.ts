@@ -434,9 +434,12 @@ async function discoverySessions(startIso: string, endIso: string) {
 }
 
 // Memberships sold in window: for each membership-sold stage, find deals and
-// count those that ENTERED the stage within the window. hs_v2_date_entered_*
-// is NOT API-filterable (returns 400), so we filter in code. Also returns a
-// per-strategist breakdown (by the deal's `strategist` field) so the strategist
+// count those whose CLOSE DATE falls within the window. We count by closedate
+// (rather than hs_v2_date_entered_<stage>) so that a sale entered late in the
+// system but with a corrected close date lands in the month the sale actually
+// happened. For all historical sold deals closedate equals the stage-entry date,
+// so this only shifts deals whose close date was manually corrected. Also returns
+// a per-strategist breakdown (by the deal's `strategist` field) so the strategist
 // table's "Sold" column uses the SAME definition as this headline figure and
 // ties out to it (deals with no strategist set fall into the headline total but
 // not into any strategist row).
@@ -445,21 +448,20 @@ async function membershipsSold(startIso: string, endIso: string) {
   const byStrategist: Record<string, number> = {};
   let total = 0;
   for (const [stageId, tier] of Object.entries(MEMBERSHIP_SOLD_TIERS)) {
-    const enteredProp = `hs_v2_date_entered_${stageId}`;
     const deals = await hubspot.searchObjects(
       "deals",
       {
         filterGroups: [
           { filters: [{ propertyName: "dealstage", operator: "EQ", value: stageId }] },
         ],
-        properties: ["dealstage", enteredProp, "strategist"],
+        properties: ["dealstage", "closedate", "strategist"],
       },
       3000,
     );
     let count = 0;
     for (const d of deals) {
-      const entered = d.properties[enteredProp];
-      if (entered && entered >= startIso && entered < endIso) {
+      const closed = d.properties.closedate;
+      if (closed && closed >= startIso && closed < endIso) {
         count++;
         const s = d.properties.strategist;
         if (s) {
