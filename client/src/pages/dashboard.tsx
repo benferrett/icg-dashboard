@@ -508,6 +508,8 @@ export default function DashboardPage({
                     <TableHead>Consultant</TableHead>
                     <TableHead className="text-right">Leads</TableHead>
                     <TableHead className="text-right">DS booked</TableHead>
+                    <TableHead className="text-right">DS sat</TableHead>
+                    <TableHead className="text-right">Show-up %</TableHead>
                     <TableHead className="text-right">Sold</TableHead>
                   </TableRow>
                 </TableHeader>
@@ -515,7 +517,7 @@ export default function DashboardPage({
                   {loading || !d
                     ? Array.from({ length: 6 }).map((_, i) => (
                         <TableRow key={i}>
-                          <TableCell colSpan={4}>
+                          <TableCell colSpan={6}>
                             <Skeleton className="h-5 w-full" />
                           </TableCell>
                         </TableRow>
@@ -525,6 +527,19 @@ export default function DashboardPage({
                           <TableCell className="font-medium">{c.name}</TableCell>
                           <TableCell className="text-right tabular-nums">{fmtNumber(c.deals)}</TableCell>
                           <TableCell className="text-right tabular-nums">{fmtNumber(c.dsBooked)}</TableCell>
+                          <TableCell className="text-right tabular-nums">{fmtNumber(c.dsSat)}</TableCell>
+                          <TableCell className="text-right">
+                            {c.showUp == null ? (
+                              <span className="text-muted-foreground">—</span>
+                            ) : (
+                              <Badge
+                                variant={c.showUp >= 70 ? "default" : "secondary"}
+                                className="tabular-nums"
+                              >
+                                {c.showUp}%
+                              </Badge>
+                            )}
+                          </TableCell>
                           <TableCell className="text-right tabular-nums">{fmtNumber(c.sold)}</TableCell>
                         </TableRow>
                       ))}

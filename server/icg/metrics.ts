@@ -384,11 +384,17 @@ async function discoverySessions(startIso: string, endIso: string) {
   // per-consultant DS-booked column reconcile with the headline `booked` total
   // (consultant bookings + Unattributed strategist-direct = booked).
   const bookedByConsultant: Record<string, number> = {};
+  const satByConsultant: Record<string, number> = {};
   // Map each DS meeting id -> associated deal ids, and each deal id -> its stage.
   // Shared by booking attribution AND the sat calc below (sat is validated from
   // the associated deal's pipeline stage, so we need these regardless).
   let dealAssoc: Record<string, string[]> = {};
   let dealProps: Record<string, any> = {};
+  // resolveBooker maps a DS meeting to the consultant who genuinely booked it
+  // (or "Unattributed"). Populated once the association data is fetched; used by
+  // BOTH the per-consultant booked attribution and the per-consultant sat
+  // attribution so the two columns use an identical booker definition.
+  let resolveBooker: (meetingId: string) => string = () => "Unattributed";
   if (dsMeetings.length) {
     const dsIds = dsMeetings.map((m) => m.id);
     const contactAssocPromise = hubspot.batchAssociations("meetings", "contacts", dsIds);
@@ -405,25 +411,20 @@ async function discoverySessions(startIso: string, endIso: string) {
         : Promise.resolve({} as Record<string, any>),
     ]);
     dealProps = dp;
-    // Booking attribution counts a booking in the period it was CREATED, so only
-    // iterate the created-in-window subset here (the fetch also pulled held-in-
-    // window meetings that may have been created earlier — those belong to sat,
-    // not booked).
-    const bookedMeetings = dsMeetings.filter((m) => {
-      const c = m.properties.hs_createdate;
-      return !!c && c >= startIso && c < endIso;
-    });
-    for (const m of bookedMeetings) {
+    // Resolve the genuine booking consultant for a DS meeting:
+    //   1) the associated deal's booking_consultant, if a real consultant; else
+    //   2) the earliest booking-consultant owner in the contact's owner history;
+    //   3) else "Unattributed" (strategist-direct booking or a test) so a
+    //      strategist never appears in the consultant table.
+    resolveBooker = (meetingId: string): string => {
       let bookerId: string | undefined;
-      // 1) Associated deal's booking_consultant, only if a real consultant.
-      for (const did of dealAssoc[m.id] || []) {
+      for (const did of dealAssoc[meetingId] || []) {
         const bc = dealProps[did]?.booking_consultant;
         if (isBookingConsultant(bc)) { bookerId = bc; break; }
       }
-      // 2) Earliest consultant owner in the contact's owner history.
       if (!bookerId) {
         let bestTs: string | undefined;
-        for (const cid of contactAssoc[m.id] || []) {
+        for (const cid of contactAssoc[meetingId] || []) {
           const hist = contactHist[cid]?.hubspot_owner_id || [];
           for (const h of hist) {
             if (!isBookingConsultant(h.value)) continue;
@@ -434,9 +435,18 @@ async function discoverySessions(startIso: string, endIso: string) {
           }
         }
       }
-      // 3) No consultant found -> strategist-direct booking or test. Leave
-      //    Unattributed so strategists never enter the consultant table.
-      const name = bookerId ? ownerName(bookerId) : "Unattributed";
+      return bookerId ? ownerName(bookerId) : "Unattributed";
+    };
+    // Booking attribution counts a booking in the period it was CREATED, so only
+    // iterate the created-in-window subset here (the fetch also pulled held-in-
+    // window meetings that may have been created earlier — those belong to sat,
+    // not booked).
+    const bookedMeetings = dsMeetings.filter((m) => {
+      const c = m.properties.hs_createdate;
+      return !!c && c >= startIso && c < endIso;
+    });
+    for (const m of bookedMeetings) {
+      const name = resolveBooker(m.id);
       bookedByConsultant[name] = (bookedByConsultant[name] || 0) + 1;
     }
   }
@@ -462,14 +472,28 @@ async function discoverySessions(startIso: string, endIso: string) {
   //     not raw meetings.
   const satStages = new Set(DS_SAT_STAGES);
   const satDealIds = new Set<string>();
+  // Per-consultant sat: attribute each UNIQUE sat deal to the consultant who
+  // booked its session, using the SAME booker resolution as booked. We attribute
+  // a deal via the first started-in-window meeting it appears on, and dedupe by
+  // deal so a re-sit (two sessions, same person) counts once for one consultant
+  // — matching the headline sat definition. Sat is counted in the period the
+  // session was HELD, so a boundary session (booked one week, held the next) is
+  // credited to the booker's sat in the HELD period; booked and sat therefore
+  // live in different period windows for such sessions, which is intentional
+  // (Ben's model: booked this week, sat next week are separate stats). The
+  // consultant show-up % is thus period-based, not cohort-based.
   for (const m of started) {
     for (const did of dealAssoc[m.id] || []) {
-      if (satStages.has(dealProps[did]?.dealstage)) satDealIds.add(did);
+      if (!satStages.has(dealProps[did]?.dealstage)) continue;
+      if (satDealIds.has(did)) continue; // dedupe by deal (unique people)
+      satDealIds.add(did);
+      const name = resolveBooker(m.id);
+      satByConsultant[name] = (satByConsultant[name] || 0) + 1;
     }
   }
   const sat = satDealIds.size;
 
-  return { booked, started: started.length, sat, bookedByConsultant };
+  return { booked, started: started.length, sat, bookedByConsultant, satByConsultant };
 }
 
 // Memberships sold in window: for each membership-sold stage, find deals and
@@ -559,6 +583,7 @@ async function salesFunnel(range: PeriodRange) {
       ok: true as const,
       window,
       bookedByConsultant: ds.bookedByConsultant,
+      satByConsultant: ds.satByConsultant,
       funnelConsultants: contact.consultants,
       soldByStrategist: sold.byStrategist,
     };
@@ -582,6 +607,7 @@ async function consultantTeam(
   range: PeriodRange,
   bookedByConsultant: Record<string, number> = {},
   funnelConsultants: FunnelConsultant[] = [],
+  satByConsultant: Record<string, number> = {},
 ) {
   // Memberships sold per booking consultant (deals created in the period).
   const deals = await hubspot.searchDeals(
@@ -620,12 +646,22 @@ async function consultantTeam(
   // Build exactly one row per canonical booking consultant.
   const names = Array.from(new Set(Object.values(BOOKING_CONSULTANTS)));
   return names
-    .map((name) => ({
-      name,
-      deals: leadsByConsultant[name] || 0, // "deals" field renders as Leads
-      dsBooked: bookedByConsultant[name] || 0,
-      sold: soldByConsultant[name] || 0,
-    }))
+    .map((name) => {
+      const dsBooked = bookedByConsultant[name] || 0;
+      const dsSat = satByConsultant[name] || 0;
+      // Show-up % = sat / booked. Period-based (booked and sat can be different
+      // cohorts within a window for boundary sessions — see discoverySessions).
+      // Null when nothing was booked so the UI can show "—" instead of 0%.
+      const showUp = dsBooked > 0 ? Math.round((dsSat / dsBooked) * 100) : null;
+      return {
+        name,
+        deals: leadsByConsultant[name] || 0, // "deals" field renders as Leads
+        dsBooked,
+        dsSat,
+        showUp,
+        sold: soldByConsultant[name] || 0,
+      };
+    })
     .sort((a, b) => b.dsBooked - a.dsBooked || b.deals - a.deals);
 }
 
@@ -1131,6 +1167,8 @@ export async function buildDashboard(periodKey?: string) {
   ]);
   const bookedByConsultant =
     funnel.ok && funnel.bookedByConsultant ? funnel.bookedByConsultant : {};
+  const satByConsultant =
+    funnel.ok && funnel.satByConsultant ? funnel.satByConsultant : {};
   const funnelConsultants =
     funnel.ok && funnel.funnelConsultants ? funnel.funnelConsultants : [];
   const soldByStrategist =
@@ -1140,7 +1178,7 @@ export async function buildDashboard(periodKey?: string) {
   // they run after the funnel resolves — ensuring every team column ties out to
   // the headline cards.
   const [consultants, strategists] = await Promise.all([
-    consultantTeam(range, bookedByConsultant, funnelConsultants),
+    consultantTeam(range, bookedByConsultant, funnelConsultants, satByConsultant),
     strategistTeam(range, soldByStrategist),
   ]);
 

@@ -74,7 +74,7 @@ export interface Dashboard {
     period?: { leads: number; spend: number; cpl: number };
   };
   salesFunnel: SalesFunnel;
-  consultants: { name: string; deals: number; dsBooked: number; sold: number }[];
+  consultants: { name: string; deals: number; dsBooked: number; dsSat: number; showUp: number | null; sold: number }[];
   strategists: { name: string; assigned: number; sold: number; conversion: number }[];
   memberships: { bronze: number; silver: number; gold: number; total: number };
   contracts: ContractsData;
