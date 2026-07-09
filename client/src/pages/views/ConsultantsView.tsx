@@ -32,13 +32,16 @@ export function ConsultantsView({
   const totalSat = d?.consultants.reduce((s, c) => s + c.dsSat, 0) ?? 0;
   const totalSold = d?.consultants.reduce((s, c) => s + c.sold, 0) ?? 0;
   const showUp = totalBooked ? Math.round((totalSat / totalBooked) * 100) : null;
+  const convToMembership = totalSat
+    ? Math.round((totalSold / totalSat) * 100)
+    : null;
 
   return (
     <div className="flex flex-col gap-8">
       {/* KPI strip */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
         {loading || !d ? (
-          Array.from({ length: 4 }).map((_, i) => (
+          Array.from({ length: 5 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-lg" />
           ))
         ) : (
@@ -57,9 +60,9 @@ export function ConsultantsView({
               testId="consultant-total-sat"
             />
             <Stat
-              label="Show-up rate"
+              label="DS sat rate"
               value={showUp == null ? "—" : `${showUp}%`}
-              sub="sat ÷ booked"
+              sub="sat / booked"
               testId="consultant-showup"
               accent
             />
@@ -68,6 +71,13 @@ export function ConsultantsView({
               value={fmtNumber(totalSold)}
               sub="from their bookings"
               testId="consultant-total-sold"
+            />
+            <Stat
+              label="Conversion to membership"
+              value={convToMembership == null ? "—" : `${convToMembership}%`}
+              sub="sold / DS sat"
+              testId="consultant-conversion"
+              accent
             />
           </>
         )}
@@ -86,7 +96,7 @@ export function ConsultantsView({
                 <TableHead className="text-right">Leads</TableHead>
                 <TableHead className="text-right">DS booked</TableHead>
                 <TableHead className="text-right">DS sat</TableHead>
-                <TableHead className="text-right">Show-up %</TableHead>
+                <TableHead className="text-right">DS sat %</TableHead>
                 <TableHead className="text-right">Sold</TableHead>
               </TableRow>
             </TableHeader>
