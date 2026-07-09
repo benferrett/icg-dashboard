@@ -98,13 +98,14 @@ export function ConsultantsView({
                 <TableHead className="text-right">DS sat</TableHead>
                 <TableHead className="text-right">DS sat %</TableHead>
                 <TableHead className="text-right">Sold</TableHead>
+                <TableHead className="text-right">Conversion %</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading || !d
                 ? Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={7}>
                         <Skeleton className="h-5 w-full" />
                       </TableCell>
                     </TableRow>
@@ -135,6 +136,23 @@ export function ConsultantsView({
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNumber(c.sold)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {c.dsSat > 0 ? (
+                          (() => {
+                            const conv = Math.round((c.sold / c.dsSat) * 100);
+                            return (
+                              <Badge
+                                variant={conv >= 25 ? "default" : "secondary"}
+                                className="tabular-nums"
+                              >
+                                {conv}%
+                              </Badge>
+                            );
+                          })()
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
