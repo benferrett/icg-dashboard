@@ -94,7 +94,7 @@ export function ContractsView({
             ) : (
               rows.map((r, i) => (
                 <TableRow key={i} data-testid={`row-${testId}-${i}`}>
-                  <TableCell className="px-2 font-medium max-w-[170px] truncate">
+                  <TableCell className="px-2 font-medium max-w-[130px] truncate">
                     <a
                       href={r.url}
                       target="_blank"
@@ -106,7 +106,7 @@ export function ContractsView({
                     </a>
                   </TableCell>
                   <TableCell
-                    className="px-2 max-w-[150px] truncate text-muted-foreground"
+                    className="px-2 max-w-[110px] truncate text-muted-foreground"
                     title={r.stage}
                   >
                     {r.stage}
