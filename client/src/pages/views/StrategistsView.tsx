@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Target, FileSignature } from "lucide-react";
+import { Target, FileSignature, Users } from "lucide-react";
 
 // Strategist performance = memberships sold + the property deals they carry.
 // We reuse contracts.deals (each has an owner = strategist) to build per-
@@ -47,10 +47,14 @@ export function StrategistsView({
     : [];
 
   const totalSold = d?.strategists.reduce((s, x) => s + x.sold, 0) ?? 0;
-  const totalAssigned = d?.strategists.reduce((s, x) => s + x.assigned, 0) ?? 0;
-  const conv = totalAssigned
-    ? Math.round((totalSold / totalAssigned) * 100)
-    : 0;
+  const totalBooked = d?.strategists.reduce((s, x) => s + x.dsBooked, 0) ?? 0;
+  const totalSat = d?.strategists.reduce((s, x) => s + x.dsSat, 0) ?? 0;
+  // Team close rate on the strategist side = memberships sold ÷ DS sat.
+  const satConv = totalSat ? Math.round((totalSold / totalSat) * 100) : 0;
+  const totalOnSession =
+    d?.strategists.reduce((s, x) => s + x.soldOnSession, 0) ?? 0;
+  const totalFollowUp =
+    d?.strategists.reduce((s, x) => s + x.soldFollowUp, 0) ?? 0;
 
   return (
     <div className="flex flex-col gap-8">
@@ -63,9 +67,10 @@ export function StrategistsView({
         ) : (
           <>
             <Stat
-              label={`Deals assigned · ${periodLabel.toLowerCase()}`}
-              value={fmtNumber(totalAssigned)}
-              testId="strategist-total-assigned"
+              label={`DS sat · ${periodLabel.toLowerCase()}`}
+              value={fmtNumber(totalSat)}
+              sub={`${fmtNumber(totalBooked)} booked`}
+              testId="strategist-total-sat"
             />
             <Stat
               label={`Memberships sold · ${periodLabel.toLowerCase()}`}
@@ -74,18 +79,16 @@ export function StrategistsView({
               accent
             />
             <Stat
-              label="Team conversion"
-              value={`${conv}%`}
-              sub="sold ÷ assigned"
+              label="Conversion to membership"
+              value={`${satConv}%`}
+              sub="sold ÷ DS sat"
               testId="strategist-conv"
             />
             <Stat
-              label={`UC settled · ${periodLabel.toLowerCase()}`}
-              value={fmtNumber(
-                d.contracts.deals.filter((x) => !!x.ucDate).length,
-              )}
-              sub="properties unconditional"
-              testId="strategist-uc"
+              label={`Sold on session · ${periodLabel.toLowerCase()}`}
+              value={fmtNumber(totalOnSession)}
+              sub={`${fmtNumber(totalFollowUp)} via follow-up`}
+              testId="strategist-on-session"
               accent
             />
           </>
@@ -102,55 +105,142 @@ export function StrategistsView({
             <TableHeader>
               <TableRow>
                 <TableHead>Strategist</TableHead>
-                <TableHead className="text-right">Assigned</TableHead>
+                <TableHead className="text-right">DS booked</TableHead>
+                <TableHead className="text-right">DS sat</TableHead>
                 <TableHead className="text-right">Membership sold</TableHead>
-                <TableHead className="text-right">Conv.</TableHead>
-                <TableHead className="text-right">EOI deals</TableHead>
-                <TableHead className="text-right">UC deals</TableHead>
+                <TableHead className="text-right">Conversion</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading || !d
                 ? Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={5}>
                         <Skeleton className="h-5 w-full" />
                       </TableCell>
                     </TableRow>
                   ))
-                : d.strategists.map((s) => {
-                    const deals = byStrategist[s.name] || [];
-                    const eoi = deals.filter((x) => !!x.eoiDate).length;
-                    const uc = deals.filter((x) => !!x.ucDate).length;
+                : d.strategists.map((s) => (
+                    <TableRow
+                      key={s.name}
+                      data-testid={`row-strategist-${s.name}`}
+                    >
+                      <TableCell className="font-medium">{s.name}</TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(s.dsBooked)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(s.dsSat)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(s.sold)}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {s.satConversion === null ? (
+                          <span className="text-muted-foreground">—</span>
+                        ) : (
+                          <Badge
+                            variant={
+                              s.satConversion >= 25 ? "default" : "secondary"
+                            }
+                            className="tabular-nums"
+                          >
+                            {s.satConversion}%
+                          </Badge>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+            </TableBody>
+          </Table>
+        </Card>
+      </Section>
+
+      {/* Membership sales split: on-session vs follow-up */}
+      <Section
+        title={`Membership sales by strategist · ${periodLabel.toLowerCase()}`}
+        icon={<Users className="h-4 w-4 text-primary" />}
+      >
+        <Card className="overflow-hidden">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Strategist</TableHead>
+                <TableHead className="text-right">Total sold</TableHead>
+                <TableHead className="text-right">On session</TableHead>
+                <TableHead className="text-right">Via follow-up</TableHead>
+                <TableHead className="text-right">On-session %</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading || !d ? (
+                Array.from({ length: 5 }).map((_, i) => (
+                  <TableRow key={i}>
+                    <TableCell colSpan={5}>
+                      <Skeleton className="h-5 w-full" />
+                    </TableCell>
+                  </TableRow>
+                ))
+              ) : d.strategists.filter((s) => s.sold > 0).length === 0 ? (
+                <TableRow>
+                  <TableCell
+                    colSpan={5}
+                    className="text-center text-sm text-muted-foreground py-6"
+                  >
+                    No memberships sold in this period.
+                  </TableCell>
+                </TableRow>
+              ) : (
+                d.strategists
+                  .filter((s) => s.sold > 0)
+                  .map((s) => {
+                    const pct = s.sold
+                      ? Math.round((s.soldOnSession / s.sold) * 100)
+                      : 0;
                     return (
                       <TableRow
                         key={s.name}
-                        data-testid={`row-strategist-${s.name}`}
+                        data-testid={`row-strat-split-${s.name}`}
                       >
                         <TableCell className="font-medium">{s.name}</TableCell>
                         <TableCell className="text-right tabular-nums">
-                          {fmtNumber(s.assigned)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
                           {fmtNumber(s.sold)}
                         </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {fmtNumber(s.soldOnSession)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {fmtNumber(s.soldFollowUp)}
+                        </TableCell>
                         <TableCell className="text-right">
-                          <Badge
-                            variant={s.conversion >= 30 ? "default" : "secondary"}
-                            className="tabular-nums"
-                          >
-                            {s.conversion}%
+                          <Badge variant="secondary" className="tabular-nums">
+                            {pct}%
                           </Badge>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {fmtNumber(eoi)}
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {fmtNumber(uc)}
                         </TableCell>
                       </TableRow>
                     );
-                  })}
+                  })
+              )}
+              {!loading && d && d.strategists.filter((s) => s.sold > 0).length > 0 && (
+                <TableRow className="border-t-2 font-medium">
+                  <TableCell>Team total</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNumber(totalSold)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNumber(totalOnSession)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNumber(totalFollowUp)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {totalSold
+                      ? Math.round((totalOnSession / totalSold) * 100)
+                      : 0}
+                    %
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
         </Card>

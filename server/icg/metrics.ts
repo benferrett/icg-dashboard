@@ -32,6 +32,17 @@ function isoDaysAgo(days: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+// Australia/Melbourne is UTC+10 with no DST in this data model. aestDay() returns
+// the local calendar day (yyyy-mm-dd) for an ISO timestamp, so we can compare a
+// membership sale's close date to the client's DS session day "same day" in AEST.
+const AEST_OFFSET_MS = 10 * 60 * 60 * 1000;
+function aestDay(iso?: string | null): string | undefined {
+  if (!iso) return undefined;
+  const t = Date.parse(iso);
+  if (isNaN(t)) return undefined;
+  return new Date(t + AEST_OFFSET_MS).toISOString().slice(0, 10);
+}
+
 function num(v?: string): number {
   if (!v) return 0;
   const n = parseFloat(v);
@@ -352,6 +363,7 @@ async function discoverySessions(startIso: string, endIso: string) {
         "hs_meeting_start_time",
         "hs_meeting_outcome",
         "hs_createdate",
+        "hubspot_owner_id",
       ],
       sorts: [{ propertyName: "hs_createdate", direction: "DESCENDING" }],
     },
@@ -385,6 +397,24 @@ async function discoverySessions(startIso: string, endIso: string) {
   // (consultant bookings + Unattributed strategist-direct = booked).
   const bookedByConsultant: Record<string, number> = {};
   const satByConsultant: Record<string, number> = {};
+  // ---- Per-STRATEGIST DS attribution (meeting owner = strategist who runs it)
+  // A DS meeting in HubSpot is OWNED by the strategist who runs the session, so
+  // the meeting's hubspot_owner_id IS the strategist. This gives the strategist-
+  // side "DS booked for you / DS you sat" (the mirror of the consultant view,
+  // which credits the booker). Booked = meetings created in window by strategist
+  // owner; sat = unique sat deals whose session was held in window, credited to
+  // that session's strategist owner. Only genuine strategist owners are counted.
+  const bookedByStrategist: Record<string, number> = {};
+  const satByStrategist: Record<string, number> = {};
+  // dsDayByContact/Deal: earliest DS session DAY (AEST yyyy-mm-dd) per associated
+  // deal, used later to classify membership sales as on-session (sold same day)
+  // vs follow-up. Keyed by deal id. Populated from started-in-window meetings.
+  const dsDayByDeal: Record<string, string> = {};
+  const strategistByMeeting: Record<string, string | undefined> = {};
+  for (const m of dsMeetings) {
+    const oid = m.properties.hubspot_owner_id;
+    strategistByMeeting[m.id] = isStrategistOwner(oid) ? ownerName(oid) : undefined;
+  }
   // Map each DS meeting id -> associated deal ids, and each deal id -> its stage.
   // Shared by booking attribution AND the sat calc below (sat is validated from
   // the associated deal's pipeline stage, so we need these regardless).
@@ -448,6 +478,8 @@ async function discoverySessions(startIso: string, endIso: string) {
     for (const m of bookedMeetings) {
       const name = resolveBooker(m.id);
       bookedByConsultant[name] = (bookedByConsultant[name] || 0) + 1;
+      const strat = strategistByMeeting[m.id];
+      if (strat) bookedByStrategist[strat] = (bookedByStrategist[strat] || 0) + 1;
     }
   }
 
@@ -483,17 +515,35 @@ async function discoverySessions(startIso: string, endIso: string) {
   // (Ben's model: booked this week, sat next week are separate stats). The
   // consultant show-up % is thus period-based, not cohort-based.
   for (const m of started) {
+    const st = m.properties.hs_meeting_start_time;
+    const dsDay = st ? aestDay(st) : undefined;
     for (const did of dealAssoc[m.id] || []) {
+      // Record the earliest DS session day per deal (for on-session classification
+      // of membership sales), regardless of sat status.
+      if (dsDay && (!dsDayByDeal[did] || dsDay < dsDayByDeal[did])) {
+        dsDayByDeal[did] = dsDay;
+      }
       if (!satStages.has(dealProps[did]?.dealstage)) continue;
       if (satDealIds.has(did)) continue; // dedupe by deal (unique people)
       satDealIds.add(did);
       const name = resolveBooker(m.id);
       satByConsultant[name] = (satByConsultant[name] || 0) + 1;
+      const strat = strategistByMeeting[m.id];
+      if (strat) satByStrategist[strat] = (satByStrategist[strat] || 0) + 1;
     }
   }
   const sat = satDealIds.size;
 
-  return { booked, started: started.length, sat, bookedByConsultant, satByConsultant };
+  return {
+    booked,
+    started: started.length,
+    sat,
+    bookedByConsultant,
+    satByConsultant,
+    bookedByStrategist,
+    satByStrategist,
+    dsDayByDeal,
+  };
 }
 
 // Memberships sold in window: for each membership-sold stage, find deals and
@@ -506,10 +556,24 @@ async function discoverySessions(startIso: string, endIso: string) {
 // table's "Sold" column uses the SAME definition as this headline figure and
 // ties out to it (deals with no strategist set fall into the headline total but
 // not into any strategist row).
-async function membershipsSold(startIso: string, endIso: string) {
+async function membershipsSold(
+  startIso: string,
+  endIso: string,
+  // DS session day (AEST yyyy-mm-dd) per deal id, from discoverySessions. Used to
+  // classify each sale as on-session (closed same day as the client's DS) vs
+  // follow-up (closed a later day). Deals whose DS was held outside this window
+  // are backfilled below via meeting associations so the split is complete.
+  dsDayByDeal: Record<string, string> = {},
+) {
   const tiers: Record<string, number> = {};
   const byStrategist: Record<string, number> = {};
+  // Per-strategist on-session vs follow-up membership sale split.
+  const splitByStrategist: Record<string, { onSession: number; followUp: number }> = {};
   let total = 0;
+  let onSessionTotal = 0;
+  let followUpTotal = 0;
+  // Collect all sold-in-window deals first so we can backfill DS days in one pass.
+  const soldDeals: { id: string; closeDay?: string; strat?: string }[] = [];
   for (const [stageId, tier] of Object.entries(MEMBERSHIP_SOLD_TIERS)) {
     const deals = await hubspot.searchObjects(
       "deals",
@@ -527,16 +591,66 @@ async function membershipsSold(startIso: string, endIso: string) {
       if (closed && closed >= startIso && closed < endIso) {
         count++;
         const s = d.properties.strategist;
-        if (s) {
-          const key = ownerName(s);
-          byStrategist[key] = (byStrategist[key] || 0) + 1;
-        }
+        const key = s ? ownerName(s) : undefined;
+        if (key) byStrategist[key] = (byStrategist[key] || 0) + 1;
+        soldDeals.push({ id: d.id, closeDay: aestDay(closed), strat: key });
       }
     }
     tiers[tier] = count;
     total += count;
   }
-  return { total, tiers, byStrategist };
+
+  // Backfill DS session day for sold deals whose DS was not held in this window
+  // (dsDayByDeal only covers window-held sessions). One batchAssociations +
+  // batchRead over the missing deals, then take the earliest DS meeting day.
+  const dsDay: Record<string, string | undefined> = {};
+  const missing = soldDeals.map((s) => s.id).filter((id) => !dsDayByDeal[id]);
+  if (missing.length) {
+    try {
+      const meetAssoc = await hubspot.batchAssociations("deals", "meetings", missing);
+      const allMeetIds = Array.from(new Set(Object.values(meetAssoc).flat()));
+      const meetProps = allMeetIds.length
+        ? await hubspot.batchRead("meetings", allMeetIds, [
+            "hs_meeting_title",
+            "hs_meeting_start_time",
+          ])
+        : {};
+      for (const id of missing) {
+        let best: string | undefined;
+        for (const mid of meetAssoc[id] || []) {
+          const mp = meetProps[mid];
+          if (!mp) continue;
+          if (!(mp.hs_meeting_title || "").startsWith(DS_TITLE_PREFIX)) continue;
+          const day = aestDay(mp.hs_meeting_start_time);
+          if (day && (!best || day < best)) best = day;
+        }
+        dsDay[id] = best;
+      }
+    } catch {
+      // If association backfill fails, those deals fall to "unknown" (follow-up).
+    }
+  }
+
+  for (const sd of soldDeals) {
+    const sessionDay = dsDayByDeal[sd.id] || dsDay[sd.id];
+    const onSession = !!sessionDay && !!sd.closeDay && sessionDay === sd.closeDay;
+    if (onSession) onSessionTotal++;
+    else followUpTotal++;
+    if (sd.strat) {
+      const b = (splitByStrategist[sd.strat] ||= { onSession: 0, followUp: 0 });
+      if (onSession) b.onSession++;
+      else b.followUp++;
+    }
+  }
+
+  return {
+    total,
+    tiers,
+    byStrategist,
+    splitByStrategist,
+    onSessionTotal,
+    followUpTotal,
+  };
 }
 
 interface FunnelWindow {
@@ -562,11 +676,13 @@ interface FunnelWindow {
 // failure here never blocks the rest of the dashboard.
 async function salesFunnel(range: PeriodRange) {
   try {
-    const [contact, ds, sold] = await Promise.all([
+    // ds must resolve before membershipsSold so we can pass dsDayByDeal for the
+    // on-session vs follow-up classification. contactFunnel runs in parallel.
+    const [contact, ds] = await Promise.all([
       contactFunnel(range.start, range.end),
       discoverySessions(range.start, range.end),
-      membershipsSold(range.start, range.end),
     ]);
+    const sold = await membershipsSold(range.start, range.end, ds.dsDayByDeal);
     const window: FunnelWindow = {
       label: range.label,
       start: range.start,
@@ -584,8 +700,15 @@ async function salesFunnel(range: PeriodRange) {
       window,
       bookedByConsultant: ds.bookedByConsultant,
       satByConsultant: ds.satByConsultant,
+      bookedByStrategist: ds.bookedByStrategist,
+      satByStrategist: ds.satByStrategist,
       funnelConsultants: contact.consultants,
       soldByStrategist: sold.byStrategist,
+      membershipSplitByStrategist: sold.splitByStrategist,
+      membershipSplitTotals: {
+        onSession: sold.onSessionTotal,
+        followUp: sold.followUpTotal,
+      },
     };
   } catch (err: any) {
     return { ok: false as const, error: err?.message || "Sales funnel data unavailable" };
@@ -674,6 +797,9 @@ async function consultantTeam(
 async function strategistTeam(
   range: PeriodRange,
   soldByStrategist: Record<string, number> = {},
+  bookedByStrategist: Record<string, number> = {},
+  satByStrategist: Record<string, number> = {},
+  splitByStrategist: Record<string, { onSession: number; followUp: number }> = {},
 ) {
   const deals = await hubspot.searchDeals(
     {
@@ -699,22 +825,36 @@ async function strategistTeam(
     if (!byStrategist[key]) byStrategist[key] = { assigned: 0 };
     byStrategist[key].assigned++;
   }
-  // Make sure strategists who sold in the period appear even if they had no new
-  // deals assigned in the same period.
-  for (const name of Object.keys(soldByStrategist)) {
+  // Make sure strategists who sold, ran DS, or had a split in the period appear
+  // even if they had no new deals assigned in the same period.
+  for (const name of [
+    ...Object.keys(soldByStrategist),
+    ...Object.keys(bookedByStrategist),
+    ...Object.keys(satByStrategist),
+    ...Object.keys(splitByStrategist),
+  ]) {
     if (!byStrategist[name]) byStrategist[name] = { assigned: 0 };
   }
   return Object.entries(byStrategist)
     .map(([name, v]) => {
       const sold = soldByStrategist[name] || 0;
+      const dsBooked = bookedByStrategist[name] || 0;
+      const dsSat = satByStrategist[name] || 0;
+      const split = splitByStrategist[name] || { onSession: 0, followUp: 0 };
       return {
         name,
         assigned: v.assigned,
         sold,
         conversion: v.assigned ? Math.round((sold / v.assigned) * 100) : 0,
+        dsBooked,
+        dsSat,
+        // Conversion of memberships sold to DS sat (the strategist-side close rate).
+        satConversion: dsSat ? Math.round((sold / dsSat) * 100) : null,
+        soldOnSession: split.onSession,
+        soldFollowUp: split.followUp,
       };
     })
-    .sort((a, b) => b.sold - a.sold || b.assigned - a.assigned)
+    .sort((a, b) => b.sold - a.sold || b.dsSat - a.dsSat || b.assigned - a.assigned)
     .slice(0, 15);
 }
 
@@ -1173,13 +1313,27 @@ export async function buildDashboard(periodKey?: string) {
     funnel.ok && funnel.funnelConsultants ? funnel.funnelConsultants : [];
   const soldByStrategist =
     funnel.ok && funnel.soldByStrategist ? funnel.soldByStrategist : {};
+  const bookedByStrategist =
+    funnel.ok && funnel.bookedByStrategist ? funnel.bookedByStrategist : {};
+  const satByStrategist =
+    funnel.ok && funnel.satByStrategist ? funnel.satByStrategist : {};
+  const membershipSplitByStrategist =
+    funnel.ok && funnel.membershipSplitByStrategist
+      ? funnel.membershipSplitByStrategist
+      : {};
   // consultantTeam and strategistTeam both depend on figures resolved inside
   // salesFunnel (DS attribution, lead counts, memberships-sold breakdown), so
   // they run after the funnel resolves — ensuring every team column ties out to
   // the headline cards.
   const [consultants, strategists] = await Promise.all([
     consultantTeam(range, bookedByConsultant, funnelConsultants, satByConsultant),
-    strategistTeam(range, soldByStrategist),
+    strategistTeam(
+      range,
+      soldByStrategist,
+      bookedByStrategist,
+      satByStrategist,
+      membershipSplitByStrategist,
+    ),
   ]);
 
   return {
