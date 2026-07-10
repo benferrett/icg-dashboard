@@ -573,7 +573,14 @@ async function membershipsSold(
   let onSessionTotal = 0;
   let followUpTotal = 0;
   // Collect all sold-in-window deals first so we can backfill DS days in one pass.
-  const soldDeals: { id: string; closeDay?: string; strat?: string }[] = [];
+  const soldDeals: {
+    id: string;
+    closeDay?: string;
+    strat?: string;
+    name: string;
+    tier: string;
+    closedate: string;
+  }[] = [];
   for (const [stageId, tier] of Object.entries(MEMBERSHIP_SOLD_TIERS)) {
     const deals = await hubspot.searchObjects(
       "deals",
@@ -581,7 +588,13 @@ async function membershipsSold(
         filterGroups: [
           { filters: [{ propertyName: "dealstage", operator: "EQ", value: stageId }] },
         ],
-        properties: ["dealstage", "closedate", "strategist", "hubspot_owner_id"],
+        properties: [
+          "dealstage",
+          "closedate",
+          "strategist",
+          "hubspot_owner_id",
+          "dealname",
+        ],
       },
       3000,
     );
@@ -598,7 +611,17 @@ async function membershipsSold(
         const s = d.properties.strategist || d.properties.hubspot_owner_id;
         const key = s && isStrategistOwner(s) ? ownerName(s) : undefined;
         if (key) byStrategist[key] = (byStrategist[key] || 0) + 1;
-        soldDeals.push({ id: d.id, closeDay: aestDay(closed), strat: key });
+        soldDeals.push({
+          id: d.id,
+          closeDay: aestDay(closed),
+          strat: key,
+          name: (d.properties.dealname || "Membership").replace(
+            /\s*[-\u2013]\s*Membership\s*$/i,
+            "",
+          ),
+          tier,
+          closedate: closed,
+        });
       }
     }
     tiers[tier] = count;
@@ -636,6 +659,17 @@ async function membershipsSold(
     }
   }
 
+  // Per-strategist list of the actual membership deals sold in the window.
+  const dealsByStrategist: Record<
+    string,
+    {
+      name: string;
+      tier: string;
+      closedate: string;
+      onSession: boolean;
+      url: string;
+    }[]
+  > = {};
   for (const sd of soldDeals) {
     const sessionDay = dsDayByDeal[sd.id] || dsDay[sd.id];
     const onSession = !!sessionDay && !!sd.closeDay && sessionDay === sd.closeDay;
@@ -645,7 +679,18 @@ async function membershipsSold(
       const b = (splitByStrategist[sd.strat] ||= { onSession: 0, followUp: 0 });
       if (onSession) b.onSession++;
       else b.followUp++;
+      (dealsByStrategist[sd.strat] ||= []).push({
+        name: sd.name,
+        tier: sd.tier,
+        closedate: sd.closedate,
+        onSession,
+        url: `https://app.hubspot.com/contacts/442187411/record/0-3/${sd.id}`,
+      });
     }
+  }
+  // Newest sale first within each strategist.
+  for (const k of Object.keys(dealsByStrategist)) {
+    dealsByStrategist[k].sort((a, b) => b.closedate.localeCompare(a.closedate));
   }
 
   return {
@@ -653,6 +698,7 @@ async function membershipsSold(
     tiers,
     byStrategist,
     splitByStrategist,
+    dealsByStrategist,
     onSessionTotal,
     followUpTotal,
   };
@@ -710,6 +756,7 @@ async function salesFunnel(range: PeriodRange) {
       funnelConsultants: contact.consultants,
       soldByStrategist: sold.byStrategist,
       membershipSplitByStrategist: sold.splitByStrategist,
+      membershipDealsByStrategist: sold.dealsByStrategist,
       membershipSplitTotals: {
         onSession: sold.onSessionTotal,
         followUp: sold.followUpTotal,
@@ -805,6 +852,10 @@ async function strategistTeam(
   bookedByStrategist: Record<string, number> = {},
   satByStrategist: Record<string, number> = {},
   splitByStrategist: Record<string, { onSession: number; followUp: number }> = {},
+  dealsByStrategist: Record<
+    string,
+    { name: string; tier: string; closedate: string; onSession: boolean; url: string }[]
+  > = {},
 ) {
   const deals = await hubspot.searchDeals(
     {
@@ -857,6 +908,7 @@ async function strategistTeam(
         satConversion: dsSat ? Math.round((sold / dsSat) * 100) : null,
         soldOnSession: split.onSession,
         soldFollowUp: split.followUp,
+        memberships: dealsByStrategist[name] || [],
       };
     })
     .sort((a, b) => b.sold - a.sold || b.dsSat - a.dsSat || b.assigned - a.assigned)
@@ -1326,6 +1378,10 @@ export async function buildDashboard(periodKey?: string) {
     funnel.ok && funnel.membershipSplitByStrategist
       ? funnel.membershipSplitByStrategist
       : {};
+  const membershipDealsByStrategist =
+    funnel.ok && funnel.membershipDealsByStrategist
+      ? funnel.membershipDealsByStrategist
+      : {};
   // consultantTeam and strategistTeam both depend on figures resolved inside
   // salesFunnel (DS attribution, lead counts, memberships-sold breakdown), so
   // they run after the funnel resolves — ensuring every team column ties out to
@@ -1338,6 +1394,7 @@ export async function buildDashboard(periodKey?: string) {
       bookedByStrategist,
       satByStrategist,
       membershipSplitByStrategist,
+      membershipDealsByStrategist,
     ),
   ]);
 

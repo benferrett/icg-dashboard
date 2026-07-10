@@ -85,6 +85,13 @@ export interface Dashboard {
     satConversion: number | null;
     soldOnSession: number;
     soldFollowUp: number;
+    memberships: {
+      name: string;
+      tier: string;
+      closedate: string;
+      onSession: boolean;
+      url: string;
+    }[];
   }[];
   memberships: { bronze: number; silver: number; gold: number; total: number };
   contracts: ContractsData;

@@ -1,5 +1,5 @@
-import { Dashboard, ContractDeal } from "@/lib/api";
-import { fmtNumber, fmtCurrency, fmtDate } from "@/lib/format";
+import { Dashboard } from "@/lib/api";
+import { fmtNumber, fmtDate } from "@/lib/format";
 import { Section } from "@/components/dashboard/Section";
 import { Stat } from "@/components/dashboard/Stat";
 import { Card } from "@/components/ui/card";
@@ -13,12 +13,10 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Target, FileSignature, Users } from "lucide-react";
+import { Target, Users } from "lucide-react";
 
-// Strategist performance = memberships sold + the property deals they carry.
-// We reuse contracts.deals (each has an owner = strategist) to build per-
-// strategist EOI/UC lists so this view is a genuine breakdown of each
-// strategist's contract pipeline, not just the summary counts.
+// Strategist view = discovery-session pipeline + the actual memberships each
+// strategist sold in the period (no property/contract deals here).
 export function StrategistsView({
   d,
   loading,
@@ -28,24 +26,6 @@ export function StrategistsView({
   loading: boolean;
   periodLabel: string;
 }) {
-  // Group every contract deal in the period by its handling strategist.
-  const byStrategist: Record<string, ContractDeal[]> = {};
-  if (d) {
-    for (const deal of d.contracts.deals) {
-      const key = deal.owner || "Unattributed";
-      (byStrategist[key] ||= []).push(deal);
-    }
-  }
-  // Order strategists by the team table (sold desc), then any extras.
-  const ordered = d
-    ? [
-        ...d.strategists.map((s) => s.name),
-        ...Object.keys(byStrategist).filter(
-          (n) => !d.strategists.some((s) => s.name === n),
-        ),
-      ]
-    : [];
-
   const totalSold = d?.strategists.reduce((s, x) => s + x.sold, 0) ?? 0;
   const totalBooked = d?.strategists.reduce((s, x) => s + x.dsBooked, 0) ?? 0;
   const totalSat = d?.strategists.reduce((s, x) => s + x.dsSat, 0) ?? 0;
@@ -246,88 +226,81 @@ export function StrategistsView({
         </Card>
       </Section>
 
-      {/* Per-strategist deal breakdown */}
+      {/* Per-strategist list of the actual memberships sold */}
       <Section
-        title={`Property deals by strategist · ${periodLabel.toLowerCase()}`}
-        icon={<FileSignature className="h-4 w-4 text-primary" />}
+        title={`Memberships sold by strategist · ${periodLabel.toLowerCase()}`}
+        icon={<Target className="h-4 w-4 text-primary" />}
       >
         {loading || !d ? (
           <Skeleton className="h-48 w-full" />
         ) : (
           <div className="flex flex-col gap-4">
-            {ordered
-              .filter((name) => (byStrategist[name] || []).length > 0)
-              .map((name) => {
-                const deals = byStrategist[name];
-                const value = deals.reduce((s, r) => s + (r.amount || 0), 0);
-                return (
-                  <Card key={name} className="p-4 overflow-hidden">
-                    <div className="flex items-center justify-between mb-2">
-                      <span className="text-sm font-medium">{name}</span>
-                      <span className="text-xs text-muted-foreground tabular-nums">
-                        {deals.length} deal{deals.length === 1 ? "" : "s"} ·{" "}
-                        {fmtCurrency(value, true)}
-                      </span>
-                    </div>
-                    <div className="overflow-x-auto">
-                      <Table className="text-xs">
-                        <TableHeader>
-                          <TableRow>
-                            <TableHead className="px-2">Deal</TableHead>
-                            <TableHead className="px-2">Where it's at</TableHead>
-                            <TableHead className="px-2 whitespace-nowrap">
-                              EOI date
-                            </TableHead>
-                            <TableHead className="px-2 whitespace-nowrap">
-                              UC date
-                            </TableHead>
-                            <TableHead className="px-2 text-right">Value</TableHead>
-                          </TableRow>
-                        </TableHeader>
-                        <TableBody>
-                          {deals.map((r, i) => (
-                            <TableRow
-                              key={i}
-                              data-testid={`row-strat-deal-${name}-${i}`}
-                            >
-                              <TableCell className="px-2 font-medium max-w-[190px] truncate">
-                                <a
-                                  href={r.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="hover:text-primary hover:underline"
-                                  title={r.name}
-                                >
-                                  {r.name}
-                                </a>
-                              </TableCell>
-                              <TableCell
-                                className="px-2 max-w-[160px] truncate text-muted-foreground"
-                                title={r.stage}
+            {d.strategists
+              .filter((s) => s.memberships.length > 0)
+              .map((s) => (
+                <Card key={s.name} className="p-4 overflow-hidden">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium">{s.name}</span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {s.memberships.length} member
+                      {s.memberships.length === 1 ? "" : "s"} · {s.soldOnSession}{" "}
+                      on session · {s.soldFollowUp} follow-up
+                    </span>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <Table className="text-xs">
+                      <TableHeader>
+                        <TableRow>
+                          <TableHead className="px-2">Member</TableHead>
+                          <TableHead className="px-2">Tier</TableHead>
+                          <TableHead className="px-2">How</TableHead>
+                          <TableHead className="px-2 text-right whitespace-nowrap">
+                            Closed
+                          </TableHead>
+                        </TableRow>
+                      </TableHeader>
+                      <TableBody>
+                        {s.memberships.map((m, i) => (
+                          <TableRow
+                            key={i}
+                            data-testid={`row-strat-member-${s.name}-${i}`}
+                          >
+                            <TableCell className="px-2 font-medium max-w-[240px] truncate">
+                              <a
+                                href={m.url}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="hover:text-primary hover:underline"
+                                title={m.name}
                               >
-                                {r.stage}
-                              </TableCell>
-                              <TableCell className="px-2 tabular-nums whitespace-nowrap text-muted-foreground">
-                                {r.eoiDate ? fmtDate(r.eoiDate) : "—"}
-                              </TableCell>
-                              <TableCell className="px-2 tabular-nums whitespace-nowrap text-muted-foreground">
-                                {r.ucDate ? fmtDate(r.ucDate) : "—"}
-                              </TableCell>
-                              <TableCell className="px-2 text-right tabular-nums whitespace-nowrap">
-                                {r.amount ? fmtCurrency(r.amount, true) : "—"}
-                              </TableCell>
-                            </TableRow>
-                          ))}
-                        </TableBody>
-                      </Table>
-                    </div>
-                  </Card>
-                );
-              })}
-            {ordered.filter((n) => (byStrategist[n] || []).length > 0).length ===
+                                {m.name}
+                              </a>
+                            </TableCell>
+                            <TableCell className="px-2 text-muted-foreground">
+                              {m.tier}
+                            </TableCell>
+                            <TableCell className="px-2">
+                              <Badge
+                                variant={m.onSession ? "default" : "secondary"}
+                                className="text-[10px]"
+                              >
+                                {m.onSession ? "On session" : "Follow-up"}
+                              </Badge>
+                            </TableCell>
+                            <TableCell className="px-2 text-right tabular-nums whitespace-nowrap text-muted-foreground">
+                              {fmtDate(m.closedate)}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </div>
+                </Card>
+              ))}
+            {d.strategists.filter((s) => s.memberships.length > 0).length ===
               0 && (
               <Card className="p-6 text-center text-sm text-muted-foreground">
-                No property deals in this period.
+                No memberships sold in this period.
               </Card>
             )}
           </div>
