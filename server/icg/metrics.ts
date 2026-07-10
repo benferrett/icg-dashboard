@@ -581,7 +581,7 @@ async function membershipsSold(
         filterGroups: [
           { filters: [{ propertyName: "dealstage", operator: "EQ", value: stageId }] },
         ],
-        properties: ["dealstage", "closedate", "strategist"],
+        properties: ["dealstage", "closedate", "strategist", "hubspot_owner_id"],
       },
       3000,
     );
@@ -590,8 +590,13 @@ async function membershipsSold(
       const closed = d.properties.closedate;
       if (closed && closed >= startIso && closed < endIso) {
         count++;
-        const s = d.properties.strategist;
-        const key = s ? ownerName(s) : undefined;
+        // Attribute by the deal's `strategist` field; when it is blank, fall
+        // back to the deal owner (some sold deals never got the strategist
+        // property set even though the owner is the strategist). Only count
+        // toward a strategist row when the resolved owner is a strategist, so
+        // per-strategist totals tie out to the headline sold figure.
+        const s = d.properties.strategist || d.properties.hubspot_owner_id;
+        const key = s && isStrategistOwner(s) ? ownerName(s) : undefined;
         if (key) byStrategist[key] = (byStrategist[key] || 0) + 1;
         soldDeals.push({ id: d.id, closeDay: aestDay(closed), strat: key });
       }
