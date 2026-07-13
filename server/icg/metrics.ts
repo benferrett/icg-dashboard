@@ -457,11 +457,20 @@ async function discoverySessions(startIso: string, endIso: string) {
     (m.properties.hs_meeting_title || "").startsWith(DS_TITLE_PREFIX);
   const dsMeetings = meetings.filter(isDs);
 
-  // Booked: DS meeting CREATED in window.
-  const booked = dsMeetings.filter((m) => {
+  // DS meetings CREATED in the window. A rebooked/rescheduled session shows up
+  // as MULTIPLE created meetings for the SAME client, so the raw meeting count
+  // over-states real bookings. Per Ben, "booked" = UNIQUE Discovery Sessions:
+  // if the same person appears 2-3 times that's one session that was
+  // rescheduled, and must count ONCE. We dedupe by the associated CONTACT below
+  // (once the association data is fetched); a meeting with no associated contact
+  // falls back to its own meeting id so it still counts as one unique session.
+  const bookedMeetingsRaw = dsMeetings.filter((m) => {
     const c = m.properties.hs_createdate;
     return !!c && c >= startIso && c < endIso;
-  }).length;
+  });
+  // Provisional count = raw meetings; replaced with the contact-deduped count
+  // once contactAssoc is available (inside the association block below).
+  let booked = bookedMeetingsRaw.length;
 
   // ---- Per-consultant booking attribution ----------------------------------
   // A DS meeting in HubSpot is OWNED by the strategist who runs the session, not
@@ -554,10 +563,34 @@ async function discoverySessions(startIso: string, endIso: string) {
     // iterate the created-in-window subset here (the fetch also pulled held-in-
     // window meetings that may have been created earlier — those belong to sat,
     // not booked).
-    const bookedMeetings = dsMeetings.filter((m) => {
-      const c = m.properties.hs_createdate;
-      return !!c && c >= startIso && c < endIso;
-    });
+    //
+    // Dedupe by associated CONTACT so a rescheduled session (same person, 2-3
+    // created meetings) counts as ONE unique DS. We keep only the FIRST created
+    // meeting per contact (bookedMeetingsRaw is date-sorted DESC from the search,
+    // so we sort ASC here to keep the earliest booking). Meetings with no
+    // associated contact key on their own id, so each still counts once. The
+    // per-consultant and per-strategist tallies use this same deduped set, so
+    // those columns reconcile with the headline `booked` total.
+    const contactKey = (m: any): string => {
+      const cids = contactAssoc[m.id] || [];
+      return cids.length ? `c:${cids.slice().sort()[0]}` : `m:${m.id}`;
+    };
+    const seenBookedKeys = new Set<string>();
+    const bookedMeetings = bookedMeetingsRaw
+      .slice()
+      .sort((a, b) =>
+        (a.properties.hs_createdate || "").localeCompare(
+          b.properties.hs_createdate || "",
+        ),
+      )
+      .filter((m) => {
+        const k = contactKey(m);
+        if (seenBookedKeys.has(k)) return false; // rescheduled dup → skip
+        seenBookedKeys.add(k);
+        return true;
+      });
+    // Replace the provisional raw count with the unique-session count.
+    booked = bookedMeetings.length;
     for (const m of bookedMeetings) {
       const name = resolveBooker(m.id);
       bookedByConsultant[name] = (bookedByConsultant[name] || 0) + 1;
