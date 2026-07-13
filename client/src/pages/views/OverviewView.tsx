@@ -29,9 +29,9 @@ export function OverviewView({
   return (
     <div className="flex flex-col gap-8">
       {/* KPI ROW */}
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         {loading || !d ? (
-          Array.from({ length: 6 }).map((_, i) => (
+          Array.from({ length: 7 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-lg" />
           ))
         ) : (
@@ -72,6 +72,21 @@ export function OverviewView({
                       : "—"
                   }
                   testId="stat-memberships"
+                />
+                <Stat
+                  label={`Membership conversion · ${periodLabel.toLowerCase()}`}
+                  value={
+                    win && win.dsSat > 0
+                      ? `${Math.round((win.membershipsSold / win.dsSat) * 100)}%`
+                      : "—"
+                  }
+                  sub={
+                    win
+                      ? `${fmtNumber(win.membershipsSold)} sold ÷ ${fmtNumber(win.dsSat)} sat`
+                      : "—"
+                  }
+                  testId="stat-membership-conversion"
+                  accent
                 />
                 <Stat
                   label={`EOI · ${periodLabel.toLowerCase()}`}
@@ -123,7 +138,7 @@ export function OverviewView({
             if (!win) return null;
             return (
               <div className="flex flex-col gap-4">
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+                <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
                   <Stat
                     label="New leads"
                     value={fmtNumber(win.totals.leads)}
@@ -165,6 +180,16 @@ export function OverviewView({
                         .join(" · ") || "none yet"
                     }
                     testId="funnel-sold"
+                  />
+                  <Stat
+                    label="Membership conversion"
+                    value={
+                      win.dsSat > 0
+                        ? `${Math.round((win.membershipsSold / win.dsSat) * 100)}%`
+                        : "—"
+                    }
+                    sub="sold ÷ DS sat"
+                    testId="funnel-membership-conversion"
                   />
                 </div>
 
