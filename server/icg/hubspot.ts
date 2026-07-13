@@ -11,26 +11,61 @@ interface Deal {
 }
 
 // --- Throttled request queue ----------------------------------------------
-// HubSpot enforces a per-second cap on /search (≈4/sec). The dashboard fires
-// many searches at once, so we funnel every search POST through a single queue
-// that spaces calls out and retries automatically on 429.
-const MIN_GAP_MS = 280; // ~3.5 req/sec, safely under the secondly search cap
-let lastCall = 0;
-let chain: Promise<void> = Promise.resolve();
+// HubSpot enforces a per-second cap on /search (≈4/sec) alongside a small burst
+// allowance. The dashboard fires many searches at once. Previously every search
+// ran through a SINGLE serialized lane spaced 280ms apart (~3.5 req/sec), which
+// meant 40+ cold-load searches executed strictly one-at-a-time → ~15s of queue
+// wait even though the sections themselves run in parallel.
+//
+// We now allow up to LANES searches IN FLIGHT concurrently while still capping
+// the START rate at ~1 every MIN_GAP_MS (≈3.5 starts/sec). This keeps us under
+// HubSpot's secondly cap but overlaps network round-trips (each search's
+// latency is mostly waiting on HubSpot, not local CPU), cutting cold time
+// roughly LANES-fold. 429s are still caught and retried in searchPost.
+const MIN_GAP_MS = 280; // ~3.5 request STARTS/sec, safely under the search cap
+const LANES = 3; // max concurrent in-flight searches
+let lastStart = 0;
+let active = 0;
+const waiters: Array<() => void> = [];
 
 function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Run `fn` after acquiring the throttle slot. Calls are serialized + spaced.
-function schedule<T>(fn: () => Promise<T>): Promise<T> {
-  const run = chain.then(async () => {
-    const wait = MIN_GAP_MS - (Date.now() - lastCall);
-    if (wait > 0) await sleep(wait);
-    lastCall = Date.now();
-  });
-  chain = run.catch(() => {});
-  return run.then(fn);
+// Acquire a concurrency slot (≤ LANES in flight), then honour the minimum gap
+// between request STARTS so we never exceed the secondly cap. Returns a release
+// fn the caller must invoke once the request settles.
+async function acquire(): Promise<() => void> {
+  if (active >= LANES) {
+    await new Promise<void>((resolve) => waiters.push(resolve));
+  }
+  active++;
+  // Reserve this start slot ATOMICALLY: compute the next allowed start time and
+  // advance `lastStart` BEFORE awaiting, so concurrent acquirers each reserve a
+  // distinct, properly-spaced slot instead of all reading the same timestamp.
+  const now = Date.now();
+  const startAt = Math.max(now, lastStart + MIN_GAP_MS);
+  lastStart = startAt;
+  const wait = startAt - now;
+  if (wait > 0) await sleep(wait);
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    active--;
+    const next = waiters.shift();
+    if (next) next();
+  };
+}
+
+// Run `fn` inside a rate-limited concurrency slot.
+async function schedule<T>(fn: () => Promise<T>): Promise<T> {
+  const release = await acquire();
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
 }
 
 async function searchPost(payload: any, objectType = "deals"): Promise<any> {
