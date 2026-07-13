@@ -8,7 +8,6 @@ import {
 import { Section } from "@/components/dashboard/Section";
 import { Stat } from "@/components/dashboard/Stat";
 import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   Table,
@@ -27,7 +26,7 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { Megaphone, Facebook, Layers, Target, AlertTriangle } from "lucide-react";
+import { Megaphone, Facebook, Layers, Target, DollarSign, AlertTriangle } from "lucide-react";
 import { CHART_COLORS, ChartTooltip } from "./shared";
 
 export function MarketingView({
@@ -309,53 +308,43 @@ export function MarketingView({
         )}
       </Section>
 
-      {/* EMBR LEADS */}
-      <Section title="EMBR leads" icon={<Layers className="h-4 w-4 text-primary" />}>
-        <Card className="p-4">
-          <div className="flex items-center justify-between mb-4">
-            <span className="text-sm font-medium">Fixed-rate lead spend</span>
-            <Badge variant="secondary" className="tabular-nums">
-              {d ? fmtCurrency(d.embr.cpl) : "$154"} / lead
-            </Badge>
-          </div>
-          {loading || !d ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-              {Array.from({ length: 4 }).map((_, i) => (
-                <Skeleton key={i} className="h-24 rounded-lg" />
-              ))}
-            </div>
-          ) : d.embr.ok === false ? (
-            <div className="flex items-start gap-3 rounded-md border border-amber-500/40 p-3">
-              <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
-              <div className="text-sm">
-                <div className="font-medium">EMBR data unavailable</div>
-                <div className="text-muted-foreground">
-                  The HubSpot token needs the{" "}
-                  <span className="font-mono text-xs">crm.objects.contacts.read</span>{" "}
-                  scope to read EMBR leads.
-                </div>
+      {/* EMBR LEADS — mirrors the Meta ads layout (period Spend / Leads / CPL) */}
+      <Section
+        title={`EMBR leads · ${periodLabel.toLowerCase()}`}
+        icon={<Layers className="h-4 w-4 text-primary" />}
+      >
+        {loading || !d ? (
+          <Skeleton className="h-32 w-full" />
+        ) : d.embr.ok === false ? (
+          <Card className="p-4 border-amber-500/40 flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <div className="font-medium">EMBR data unavailable</div>
+              <div className="text-muted-foreground">
+                The HubSpot token needs the{" "}
+                <span className="font-mono text-xs">crm.objects.contacts.read</span>{" "}
+                scope to read EMBR leads.
               </div>
             </div>
-          ) : (
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-3">
             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
               <Stat
-                label="Spend · 7d"
-                value={fmtCurrency(d.embr.last7.spend)}
-                sub={`${fmtNumber(d.embr.last7.leads)} leads`}
-                testId="embr-7"
+                label="Spend"
+                value={fmtCurrency((d.embr.period ?? d.embr.total).spend)}
+                testId="embr-spend"
                 accent
               />
               <Stat
-                label="Spend · 30d"
-                value={fmtCurrency(d.embr.last30.spend)}
-                sub={`${fmtNumber(d.embr.last30.leads)} leads`}
-                testId="embr-30"
+                label="Leads"
+                value={fmtNumber((d.embr.period ?? d.embr.total).leads)}
+                testId="embr-leads"
               />
               <Stat
-                label="Spend · 90d"
-                value={fmtCurrency(d.embr.last90.spend)}
-                sub={`${fmtNumber(d.embr.last90.leads)} leads`}
-                testId="embr-90"
+                label="Cost per lead"
+                value={fmtCurrency(d.embr.cpl)}
+                testId="embr-cpl"
               />
               <Stat
                 label="Total to date"
@@ -364,8 +353,96 @@ export function MarketingView({
                 testId="embr-total"
               />
             </div>
-          )}
-        </Card>
+            <p className="text-xs text-muted-foreground">
+              EMBR is a fixed-rate lead provider billed at{" "}
+              {fmtCurrency(d.embr.cpl)} per lead, so cost per lead is constant.
+            </p>
+          </div>
+        )}
+      </Section>
+
+      {/* CAC — cost to acquire a paying membership, per channel + combined */}
+      <Section
+        title={`Customer acquisition cost · ${periodLabel.toLowerCase()}`}
+        icon={<DollarSign className="h-4 w-4 text-primary" />}
+      >
+        <p className="text-sm text-muted-foreground -mt-1 mb-1">
+          Ad / lead spend divided by memberships sold this period. Sales are
+          attributed to a channel by the buyer&apos;s original lead source (EMBR
+          tag vs Meta).
+        </p>
+        {loading || !d || metaLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <Skeleton key={i} className="h-28 rounded-lg" />
+            ))}
+          </div>
+        ) : (
+          (() => {
+            const metaSpend =
+              meta?.status === "ok" && meta.totals ? meta.totals.spend : null;
+            const embrSpend = d.embr.ok
+              ? (d.embr.period ?? d.embr.total).spend
+              : null;
+            const metaSold = d.soldByChannel?.meta ?? 0;
+            const embrSold = d.soldByChannel?.embr ?? 0;
+            const cac = (spend: number | null, sold: number) =>
+              spend == null ? null : sold > 0 ? spend / sold : null;
+            const metaCac = cac(metaSpend, metaSold);
+            const embrCac = cac(embrSpend, embrSold);
+            const combinedSpend =
+              metaSpend == null && embrSpend == null
+                ? null
+                : (metaSpend ?? 0) + (embrSpend ?? 0);
+            const combinedSold = metaSold + embrSold;
+            const combinedCac = cac(combinedSpend, combinedSold);
+            const val = (c: number | null) =>
+              c == null ? "—" : fmtCurrency(c);
+            return (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <Card className="p-4" data-testid="cac-meta">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Facebook className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">Meta</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Stat label="Spend" value={metaSpend == null ? "—" : fmtCurrency(metaSpend)} />
+                    <Stat label="Members" value={fmtNumber(metaSold)} />
+                    <Stat label="CAC" value={val(metaCac)} accent />
+                  </div>
+                </Card>
+                <Card className="p-4" data-testid="cac-embr">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Layers className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">EMBR</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Stat label="Spend" value={embrSpend == null ? "—" : fmtCurrency(embrSpend)} />
+                    <Stat label="Members" value={fmtNumber(embrSold)} />
+                    <Stat label="CAC" value={val(embrCac)} accent />
+                  </div>
+                </Card>
+                <Card className="p-4 bg-muted/40" data-testid="cac-combined">
+                  <div className="flex items-center gap-2 mb-3">
+                    <Target className="h-4 w-4 text-primary" />
+                    <span className="text-sm font-medium">Combined</span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2">
+                    <Stat label="Spend" value={combinedSpend == null ? "—" : fmtCurrency(combinedSpend)} />
+                    <Stat label="Members" value={fmtNumber(combinedSold)} />
+                    <Stat label="CAC" value={val(combinedCac)} accent />
+                  </div>
+                </Card>
+              </div>
+            );
+          })()
+        )}
+        {meta?.status !== "ok" && !metaLoading && (
+          <p className="text-xs text-amber-600 dark:text-amber-500 mt-1">
+            Meta spend is unavailable, so Meta and combined CAC cannot be
+            calculated. EMBR CAC is still shown.
+          </p>
+        )}
       </Section>
     </div>
   );

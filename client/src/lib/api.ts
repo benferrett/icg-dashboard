@@ -79,6 +79,9 @@ export interface Dashboard {
     total: { leads: number; spend: number; cpl: number };
     period?: { leads: number; spend: number; cpl: number };
   };
+  // Memberships sold in the period attributed to each acquisition channel
+  // (via the sold deal's contact lead_source). Denominator for CAC.
+  soldByChannel: { meta: number; embr: number };
   salesFunnel: SalesFunnel;
   consultants: { name: string; deals: number; dsBooked: number; dsSat: number; showUp: number | null; sold: number }[];
   strategists: {

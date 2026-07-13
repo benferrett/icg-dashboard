@@ -776,6 +776,35 @@ async function membershipsSold(
     dealsByStrategist[k].sort((a, b) => b.closedate.localeCompare(a.closedate));
   }
 
+  // ---- Channel attribution (Meta vs EMBR) for CAC ---------------------------
+  // Trace each sold-in-window membership back to its associated CONTACT's
+  // lead_source. EMBR = lead_source='EMBR'; Meta = every other source (same rule
+  // used for lead counts and booking rate). A deal may associate to multiple
+  // contacts; if ANY associated contact is EMBR-tagged we count the sale as
+  // EMBR, else Meta. Used as the CAC denominator per channel.
+  const byChannel = { meta: 0, embr: 0 };
+  try {
+    const soldIds = soldDeals.map((s) => s.id);
+    if (soldIds.length) {
+      const contactAssoc = await hubspot.batchAssociations("deals", "contacts", soldIds);
+      const allContactIds = Array.from(new Set(Object.values(contactAssoc).flat()));
+      const contactProps = allContactIds.length
+        ? await hubspot.batchRead("contacts", allContactIds, ["lead_source"])
+        : {};
+      for (const sd of soldDeals) {
+        const cids = contactAssoc[sd.id] || [];
+        const isEmbr = cids.some(
+          (cid) => contactProps[cid]?.lead_source === "EMBR",
+        );
+        if (isEmbr) byChannel.embr++;
+        else byChannel.meta++;
+      }
+    }
+  } catch {
+    // If attribution fails, leave byChannel at zero — CAC section degrades
+    // gracefully rather than blocking the sold count.
+  }
+
   return {
     total,
     tiers,
@@ -784,6 +813,7 @@ async function membershipsSold(
     dealsByStrategist,
     onSessionTotal,
     followUpTotal,
+    byChannel,
   };
 }
 
@@ -844,6 +874,7 @@ async function salesFunnel(range: PeriodRange) {
         onSession: sold.onSessionTotal,
         followUp: sold.followUpTotal,
       },
+      soldByChannel: sold.byChannel,
     };
   } catch (err: any) {
     return { ok: false as const, error: err?.message || "Sales funnel data unavailable" };
@@ -1465,6 +1496,12 @@ export async function buildDashboard(periodKey?: string) {
     funnel.ok && funnel.membershipDealsByStrategist
       ? funnel.membershipDealsByStrategist
       : {};
+  // Memberships sold in the period split by acquisition channel (Meta vs EMBR),
+  // used together with per-channel spend to compute CAC on the marketing page.
+  const soldByChannel =
+    funnel.ok && funnel.soldByChannel
+      ? funnel.soldByChannel
+      : { meta: 0, embr: 0 };
   // consultantTeam and strategistTeam both depend on figures resolved inside
   // salesFunnel (DS attribution, lead counts, memberships-sold breakdown), so
   // they run after the funnel resolves — ensuring every team column ties out to
@@ -1492,6 +1529,7 @@ export async function buildDashboard(periodKey?: string) {
     pipelines,
     marketing: mkt,
     embr: embrData,
+    soldByChannel,
     salesFunnel: funnel,
     consultants,
     strategists,
