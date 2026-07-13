@@ -2,7 +2,7 @@ import { Dashboard, MetaData } from "@/lib/api";
 import {
   fmtCurrency,
   fmtNumber,
-  fmtMonth,
+  fmtPct,
   fmtDateShort,
 } from "@/lib/format";
 import { Section } from "@/components/dashboard/Section";
@@ -22,14 +22,12 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
-  BarChart,
-  Bar,
   XAxis,
   YAxis,
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { Megaphone, Facebook, Layers, DollarSign, AlertTriangle } from "lucide-react";
+import { Megaphone, Facebook, Layers, Target, AlertTriangle } from "lucide-react";
 import { CHART_COLORS, ChartTooltip } from "./shared";
 
 export function MarketingView({
@@ -144,6 +142,105 @@ export function MarketingView({
             </div>
           </Card>
         </div>
+      </Section>
+
+      {/* LEADS & BOOKING RATE (cohort, split by channel) */}
+      <Section
+        title={`Leads & booking rate · ${periodLabel.toLowerCase()}`}
+        icon={<Target className="h-4 w-4 text-primary" />}
+      >
+        <p className="text-xs text-muted-foreground mb-3 -mt-1">
+          Of the leads generated this period, the share we have booked into a
+          Discovery Session — tracked per lead (cohort), split by channel.
+        </p>
+        {loading || !d ? (
+          <div className="grid md:grid-cols-2 gap-4">
+            <Skeleton className="h-40 w-full" />
+            <Skeleton className="h-40 w-full" />
+          </div>
+        ) : d.marketing.leadBooking?.ok === false ? (
+          <Card className="p-4 border-amber-500/40 flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <div className="font-medium">Booking rate unavailable</div>
+              <div className="text-muted-foreground">
+                Could not read lead-to-booking data from HubSpot for this period.
+              </div>
+            </div>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-4">
+            <div className="grid md:grid-cols-2 gap-4">
+              {(
+                [
+                  { key: "meta", label: "Meta", icon: <Facebook className="h-4 w-4" /> },
+                  { key: "embr", label: "EMBR", icon: <Layers className="h-4 w-4" /> },
+                ] as const
+              ).map(({ key, label, icon }) => {
+                const c = d.marketing.leadBooking[key];
+                return (
+                  <Card key={key} className="p-4" data-testid={`leadbooking-${key}`}>
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-muted-foreground">{icon}</span>
+                      <span className="text-sm font-medium">{label}</span>
+                    </div>
+                    <div className="grid grid-cols-3 gap-3">
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          Leads
+                        </span>
+                        <span className="text-xl font-semibold tabular-nums leading-none">
+                          {fmtNumber(c.leads)}
+                        </span>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          Booked
+                        </span>
+                        <span className="text-xl font-semibold tabular-nums leading-none">
+                          {fmtNumber(c.booked)}
+                        </span>
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                          Book rate
+                        </span>
+                        <span className="text-xl font-semibold tabular-nums leading-none text-primary">
+                          {fmtPct(c.bookRate * 100, 1)}
+                        </span>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+            <Card className="p-4 bg-muted/40" data-testid="leadbooking-total">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium">All channels</span>
+                <div className="flex items-center gap-6 text-sm tabular-nums">
+                  <span>
+                    <span className="text-muted-foreground">Leads </span>
+                    <span className="font-semibold">
+                      {fmtNumber(d.marketing.leadBooking.total.leads)}
+                    </span>
+                  </span>
+                  <span>
+                    <span className="text-muted-foreground">Booked </span>
+                    <span className="font-semibold">
+                      {fmtNumber(d.marketing.leadBooking.total.booked)}
+                    </span>
+                  </span>
+                  <span>
+                    <span className="text-muted-foreground">Book rate </span>
+                    <span className="font-semibold text-primary">
+                      {fmtPct(d.marketing.leadBooking.total.bookRate * 100, 1)}
+                    </span>
+                  </span>
+                </div>
+              </div>
+            </Card>
+          </div>
+        )}
       </Section>
 
       {/* META ADS */}
@@ -269,91 +366,6 @@ export function MarketingView({
             </div>
           )}
         </Card>
-      </Section>
-
-      {/* FINANCIAL */}
-      <Section
-        title="Financial performance"
-        icon={<DollarSign className="h-4 w-4 text-primary" />}
-      >
-        <div className="grid lg:grid-cols-3 gap-4">
-          <Card className="p-4 lg:col-span-2">
-            <div className="flex items-center justify-between mb-3">
-              <span className="text-sm font-medium">Pipeline value by month</span>
-              {d && (
-                <span className="text-xs text-muted-foreground tabular-nums">
-                  {fmtCurrency(d.financial.totalValue, true)} total
-                </span>
-              )}
-            </div>
-            {loading || !d ? (
-              <Skeleton className="h-48 w-full" />
-            ) : (
-              <ResponsiveContainer width="100%" height={200}>
-                <BarChart
-                  data={d.financial.monthly}
-                  margin={{ top: 4, right: 8, left: 4, bottom: 0 }}
-                >
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" vertical={false} />
-                  <XAxis
-                    dataKey="month"
-                    tickFormatter={fmtMonth}
-                    tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                    tickLine={false}
-                    axisLine={false}
-                  />
-                  <YAxis
-                    tickFormatter={(v) => fmtCurrency(v, true)}
-                    tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
-                    tickLine={false}
-                    axisLine={false}
-                    width={56}
-                  />
-                  <Tooltip
-                    cursor={{ fill: "hsl(var(--muted))", opacity: 0.4 }}
-                    content={(p) => (
-                      <ChartTooltip
-                        {...p}
-                        label={p.label ? fmtMonth(p.label as string) : ""}
-                        valueFmt={(v: number) => fmtCurrency(v)}
-                      />
-                    )}
-                  />
-                  <Bar dataKey="value" radius={[4, 4, 0, 0]} fill="hsl(var(--chart-1))" />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </Card>
-
-          <Card className="p-4">
-            <span className="text-sm font-medium">Value by pipeline</span>
-            <div className="mt-3 flex flex-col gap-3">
-              {loading || !d
-                ? Array.from({ length: 4 }).map((_, i) => (
-                    <Skeleton key={i} className="h-10 w-full" />
-                  ))
-                : d.financial.byPipeline
-                    .slice()
-                    .sort((a, b) => b.value - a.value)
-                    .map((p) => (
-                      <div
-                        key={p.name}
-                        className="flex items-center justify-between gap-3 text-sm"
-                      >
-                        <div className="flex flex-col">
-                          <span className="font-medium truncate">{p.name}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {fmtNumber(p.count)} deals
-                          </span>
-                        </div>
-                        <span className="tabular-nums font-semibold">
-                          {fmtCurrency(p.value, true)}
-                        </span>
-                      </div>
-                    ))}
-            </div>
-          </Card>
-        </div>
       </Section>
     </div>
   );

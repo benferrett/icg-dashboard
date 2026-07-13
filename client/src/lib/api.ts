@@ -62,6 +62,12 @@ export interface Dashboard {
     sources: { name: string; count: number }[];
     trend: { date: string; count: number }[];
     sampleSize: number;
+    leadBooking: {
+      ok: boolean;
+      meta: { leads: number; booked: number; bookRate: number };
+      embr: { leads: number; booked: number; bookRate: number };
+      total: { leads: number; booked: number; bookRate: number };
+    };
   };
   embr: {
     cpl: number;

@@ -144,6 +144,17 @@ async function marketing(range: PeriodRange) {
   }
   const trend = Object.entries(byDay).map(([date, count]) => ({ date, count }));
 
+  // ---- Cohort booking rate by channel --------------------------------------
+  // Of the leads (HubSpot contacts) CREATED in the selected period, how many
+  // eventually BOOKED a Discovery Session, split by channel (EMBR vs Meta).
+  // This is a cohort measure (per Ben): we track the exact leads created in the
+  // window and check whether each one ever reached a DS-booking deal stage,
+  // regardless of when the booking happened. It differs from the sales-funnel
+  // "DS booked" (which counts DS meetings CREATED in the window, including ones
+  // for leads generated earlier) — this answers "of the leads we generated this
+  // period, what % have we booked in?".
+  const leadBooking = await leadBookingByChannel(range);
+
   return {
     newLeads7: last7,
     newLeads30: last30,
@@ -153,7 +164,79 @@ async function marketing(range: PeriodRange) {
     sources,
     trend,
     sampleSize: recent.length,
+    leadBooking,
   };
+}
+
+// A lead "booked a DS" if any associated deal reached DS Booked, DS No Show /
+// To Reschedule (they DID book, just didn't show), or any DS Sat stage.
+const DS_BOOKING_STAGES = new Set<string>([
+  DISCOVERY_BOOKED_STAGE, // Discovery Session Booked
+  "2868125118", // DS No Show / To Reschedule (booked but no-show)
+  ...DS_SAT_STAGES, // any DS Sat - … stage (booked and sat)
+]);
+
+type ChannelBooking = { leads: number; booked: number; bookRate: number };
+
+async function leadBookingByChannel(
+  range: PeriodRange,
+): Promise<{ ok: boolean; meta: ChannelBooking; embr: ChannelBooking; total: ChannelBooking }> {
+  const zero = (): ChannelBooking => ({ leads: 0, booked: 0, bookRate: 0 });
+  const rate = (b: ChannelBooking): ChannelBooking => ({
+    ...b,
+    bookRate: b.leads > 0 ? b.booked / b.leads : 0,
+  });
+  try {
+    // 1. All contacts created in the period, with lead_source.
+    const contacts = await hubspot.searchObjects(
+      "contacts",
+      {
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: "createdate", operator: "GTE", value: range.start },
+              { propertyName: "createdate", operator: "LT", value: range.end },
+            ],
+          },
+        ],
+        properties: ["lead_source"],
+      },
+      5000,
+    );
+    const channelOf: Record<string, "EMBR" | "META"> = {};
+    for (const c of contacts) {
+      channelOf[c.id] = c.properties.lead_source === "EMBR" ? "EMBR" : "META";
+    }
+    const ids = Object.keys(channelOf);
+
+    // 2. Associated deals per contact, then those deals' stages.
+    const assoc = await hubspot.batchAssociations("contacts", "deals", ids);
+    const allDeals = Array.from(
+      new Set(Object.values(assoc).flat()),
+    );
+    const dealProps = await hubspot.batchRead("deals", allDeals, ["dealstage"]);
+
+    // 3. Tally per channel.
+    const meta = zero();
+    const embr = zero();
+    for (const id of ids) {
+      const bucket = channelOf[id] === "EMBR" ? embr : meta;
+      bucket.leads++;
+      const deals = assoc[id] || [];
+      const booked = deals.some((d) =>
+        DS_BOOKING_STAGES.has(dealProps[d]?.dealstage || ""),
+      );
+      if (booked) bucket.booked++;
+    }
+    const total: ChannelBooking = {
+      leads: meta.leads + embr.leads,
+      booked: meta.booked + embr.booked,
+      bookRate: 0,
+    };
+    return { ok: true, meta: rate(meta), embr: rate(embr), total: rate(total) };
+  } catch (err) {
+    return { ok: false, meta: zero(), embr: zero(), total: zero() };
+  }
 }
 
 // ---- EMBR LEADS ------------------------------------------------------------
