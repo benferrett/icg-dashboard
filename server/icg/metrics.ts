@@ -457,6 +457,17 @@ async function discoverySessions(startIso: string, endIso: string) {
     (m.properties.hs_meeting_title || "").startsWith(DS_TITLE_PREFIX);
   const dsMeetings = meetings.filter(isDs);
 
+  // Extract the client name from a DS meeting title, which is formatted as
+  // "Inner Circle Group Discovery Session: <CLIENT> With <STRATEGIST> Via Zoom".
+  // We take the text between the leading ": " and " With ". Falls back to the
+  // trimmed title if the pattern doesn't match.
+  const clientFromTitle = (title: string): string => {
+    const afterColon = title.slice(DS_TITLE_PREFIX.length).replace(/^:\s*/, "");
+    const withIdx = afterColon.search(/\s+With\s+/i);
+    return (withIdx >= 0 ? afterColon.slice(0, withIdx) : afterColon).trim() ||
+      "(unnamed)";
+  };
+
   // DS meetings CREATED in the window. A rebooked/rescheduled session shows up
   // as MULTIPLE created meetings for the SAME client, so the raw meeting count
   // over-states real bookings. Per Ben, "booked" = UNIQUE Discovery Sessions:
@@ -489,6 +500,16 @@ async function discoverySessions(startIso: string, endIso: string) {
   // (consultant bookings + Unattributed strategist-direct = booked).
   const bookedByConsultant: Record<string, number> = {};
   const satByConsultant: Record<string, number> = {};
+  // Per-consultant CLIENT-LEVEL lists (for the drill-down section on the
+  // Consultants page). bookingsByConsultant = the unique DS each consultant
+  // booked in the window (client name + created date). satsByConsultant = the
+  // clients from their bookings who actually sat in the window (client name +
+  // held date). Both use the SAME booker resolution + dedupe as the counts, so
+  // list lengths equal bookedByConsultant / satByConsultant.
+  type BookingItem = { client: string; date: string };
+  type SatItem = { client: string; date: string };
+  const bookingsByConsultant: Record<string, BookingItem[]> = {};
+  const satsByConsultant: Record<string, SatItem[]> = {};
   // ---- Per-STRATEGIST DS attribution (meeting owner = strategist who runs it)
   // A DS meeting in HubSpot is OWNED by the strategist who runs the session, so
   // the meeting's hubspot_owner_id IS the strategist. This gives the strategist-
@@ -594,6 +615,10 @@ async function discoverySessions(startIso: string, endIso: string) {
     for (const m of bookedMeetings) {
       const name = resolveBooker(m.id);
       bookedByConsultant[name] = (bookedByConsultant[name] || 0) + 1;
+      (bookingsByConsultant[name] ||= []).push({
+        client: clientFromTitle(m.properties.hs_meeting_title || ""),
+        date: m.properties.hs_createdate || "",
+      });
       const strat = strategistByMeeting[m.id];
       if (strat) bookedByStrategist[strat] = (bookedByStrategist[strat] || 0) + 1;
     }
@@ -644,11 +669,21 @@ async function discoverySessions(startIso: string, endIso: string) {
       satDealIds.add(did);
       const name = resolveBooker(m.id);
       satByConsultant[name] = (satByConsultant[name] || 0) + 1;
+      (satsByConsultant[name] ||= []).push({
+        client: clientFromTitle(m.properties.hs_meeting_title || ""),
+        date: st || "",
+      });
       const strat = strategistByMeeting[m.id];
       if (strat) satByStrategist[strat] = (satByStrategist[strat] || 0) + 1;
     }
   }
   const sat = satDealIds.size;
+
+  // Sort each consultant's lists by date (ascending) for stable display.
+  for (const k of Object.keys(bookingsByConsultant))
+    bookingsByConsultant[k].sort((a, b) => a.date.localeCompare(b.date));
+  for (const k of Object.keys(satsByConsultant))
+    satsByConsultant[k].sort((a, b) => a.date.localeCompare(b.date));
 
   return {
     booked,
@@ -656,6 +691,8 @@ async function discoverySessions(startIso: string, endIso: string) {
     sat,
     bookedByConsultant,
     satByConsultant,
+    bookingsByConsultant,
+    satsByConsultant,
     bookedByStrategist,
     satByStrategist,
     dsDayByDeal,
@@ -897,6 +934,8 @@ async function salesFunnel(range: PeriodRange) {
       window,
       bookedByConsultant: ds.bookedByConsultant,
       satByConsultant: ds.satByConsultant,
+      bookingsByConsultant: ds.bookingsByConsultant,
+      satsByConsultant: ds.satsByConsultant,
       bookedByStrategist: ds.bookedByStrategist,
       satByStrategist: ds.satByStrategist,
       funnelConsultants: contact.consultants,
@@ -930,6 +969,8 @@ async function consultantTeam(
   bookedByConsultant: Record<string, number> = {},
   funnelConsultants: FunnelConsultant[] = [],
   satByConsultant: Record<string, number> = {},
+  bookingsByConsultant: Record<string, { client: string; date: string }[]> = {},
+  satsByConsultant: Record<string, { client: string; date: string }[]> = {},
 ) {
   // Memberships sold per booking consultant (deals created in the period).
   const deals = await hubspot.searchDeals(
@@ -982,6 +1023,10 @@ async function consultantTeam(
         dsSat,
         showUp,
         sold: soldByConsultant[name] || 0,
+        // Client-level drill-down lists for this consultant (same booker
+        // resolution + dedupe as the counts above).
+        bookings: bookingsByConsultant[name] || [],
+        sats: satsByConsultant[name] || [],
       };
     })
     .sort((a, b) => b.dsBooked - a.dsBooked || b.deals - a.deals);
@@ -1513,6 +1558,10 @@ export async function buildDashboard(periodKey?: string) {
     funnel.ok && funnel.bookedByConsultant ? funnel.bookedByConsultant : {};
   const satByConsultant =
     funnel.ok && funnel.satByConsultant ? funnel.satByConsultant : {};
+  const bookingsByConsultant =
+    funnel.ok && funnel.bookingsByConsultant ? funnel.bookingsByConsultant : {};
+  const satsByConsultant =
+    funnel.ok && funnel.satsByConsultant ? funnel.satsByConsultant : {};
   const funnelConsultants =
     funnel.ok && funnel.funnelConsultants ? funnel.funnelConsultants : [];
   const soldByStrategist =
@@ -1540,7 +1589,14 @@ export async function buildDashboard(periodKey?: string) {
   // they run after the funnel resolves — ensuring every team column ties out to
   // the headline cards.
   const [consultants, strategists] = await Promise.all([
-    consultantTeam(range, bookedByConsultant, funnelConsultants, satByConsultant),
+    consultantTeam(
+      range,
+      bookedByConsultant,
+      funnelConsultants,
+      satByConsultant,
+      bookingsByConsultant,
+      satsByConsultant,
+    ),
     strategistTeam(
       range,
       soldByStrategist,

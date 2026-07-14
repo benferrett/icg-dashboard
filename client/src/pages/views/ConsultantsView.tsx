@@ -1,5 +1,5 @@
 import { Dashboard } from "@/lib/api";
-import { fmtNumber } from "@/lib/format";
+import { fmtNumber, fmtDateShort } from "@/lib/format";
 import { Section } from "@/components/dashboard/Section";
 import { Stat } from "@/components/dashboard/Stat";
 import { Card } from "@/components/ui/card";
@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Users, Filter } from "lucide-react";
+import { Users, Filter, ListChecks, CalendarCheck } from "lucide-react";
 
 // Consultant performance = the bookings a consultant made and what share showed
 // up. We surface (1) a KPI strip of period totals, (2) the full performance
@@ -159,6 +159,99 @@ export function ConsultantsView({
             </TableBody>
           </Table>
         </Card>
+      </Section>
+
+      {/* Bookings & sats drill-down per consultant */}
+      <Section
+        title={`Bookings & sats by consultant · ${periodLabel.toLowerCase()}`}
+        icon={<ListChecks className="h-4 w-4 text-primary" />}
+      >
+        {loading || !d ? (
+          <div className="grid gap-4 md:grid-cols-2">
+            {Array.from({ length: 4 }).map((_, i) => (
+              <Skeleton key={i} className="h-48 rounded-lg" />
+            ))}
+          </div>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            {d.consultants
+              .filter((c) => c.bookings.length > 0 || c.sats.length > 0)
+              .map((c) => (
+                <Card
+                  key={c.name}
+                  className="p-4 flex flex-col gap-4"
+                  data-testid={`card-consultant-lists-${c.name}`}
+                >
+                  <div className="flex items-center justify-between">
+                    <span className="font-semibold">{c.name}</span>
+                    <span className="text-xs text-muted-foreground tabular-nums">
+                      {fmtNumber(c.bookings.length)} booked ·{" "}
+                      {fmtNumber(c.sats.length)} sat
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Bookings made */}
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        <CalendarCheck className="h-3.5 w-3.5" />
+                        Booked ({fmtNumber(c.bookings.length)})
+                      </div>
+                      {c.bookings.length === 0 ? (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      ) : (
+                        <ul className="flex flex-col gap-1">
+                          {c.bookings.map((b, i) => (
+                            <li
+                              key={`${b.client}-${i}`}
+                              className="flex items-baseline justify-between gap-2 text-sm"
+                              data-testid={`booking-${c.name}-${i}`}
+                            >
+                              <span className="truncate">{b.client}</span>
+                              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                                {fmtDateShort(b.date)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    {/* Bookings that sat */}
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        <Users className="h-3.5 w-3.5" />
+                        Sat ({fmtNumber(c.sats.length)})
+                      </div>
+                      {c.sats.length === 0 ? (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      ) : (
+                        <ul className="flex flex-col gap-1">
+                          {c.sats.map((s, i) => (
+                            <li
+                              key={`${s.client}-${i}`}
+                              className="flex items-baseline justify-between gap-2 text-sm"
+                              data-testid={`sat-${c.name}-${i}`}
+                            >
+                              <span className="truncate">{s.client}</span>
+                              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                                {fmtDateShort(s.date)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            {d.consultants.every(
+              (c) => c.bookings.length === 0 && c.sats.length === 0,
+            ) && (
+              <div className="text-center text-muted-foreground text-sm py-6 md:col-span-2">
+                No bookings in this period.
+              </div>
+            )}
+          </div>
+        )}
       </Section>
 
       {/* Lead contact funnel per consultant */}
