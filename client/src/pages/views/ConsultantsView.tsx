@@ -13,7 +13,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Users, Filter, ListChecks, CalendarCheck } from "lucide-react";
+import {
+  Users,
+  Filter,
+  ListChecks,
+  CalendarCheck,
+  CalendarClock,
+} from "lucide-react";
 
 // Consultant performance = the bookings a consultant made and what share showed
 // up. We surface (1) a KPI strip of period totals, (2) the full performance
@@ -29,9 +35,15 @@ export function ConsultantsView({
 }) {
   const win = d?.salesFunnel?.ok ? d.salesFunnel.window : undefined;
   const totalBooked = d?.consultants.reduce((s, c) => s + c.dsBooked, 0) ?? 0;
+  const totalScheduled =
+    d?.consultants.reduce((s, c) => s + c.dsScheduled, 0) ?? 0;
   const totalSat = d?.consultants.reduce((s, c) => s + c.dsSat, 0) ?? 0;
   const totalSold = d?.consultants.reduce((s, c) => s + c.sold, 0) ?? 0;
-  const showUp = totalBooked ? Math.round((totalSat / totalBooked) * 100) : null;
+  // Show-up rate = sat / SCHEDULED (of the sessions meant to be held this
+  // period, what share sat).
+  const showUp = totalScheduled
+    ? Math.round((totalSat / totalScheduled) * 100)
+    : null;
   const convToMembership = totalSat
     ? Math.round((totalSold / totalSat) * 100)
     : null;
@@ -39,9 +51,9 @@ export function ConsultantsView({
   return (
     <div className="flex flex-col gap-8">
       {/* KPI strip */}
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
         {loading || !d ? (
-          Array.from({ length: 5 }).map((_, i) => (
+          Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-lg" />
           ))
         ) : (
@@ -54,6 +66,12 @@ export function ConsultantsView({
               accent
             />
             <Stat
+              label={`DS scheduled · ${periodLabel.toLowerCase()}`}
+              value={fmtNumber(totalScheduled)}
+              sub="scheduled this period"
+              testId="consultant-total-scheduled"
+            />
+            <Stat
               label={`DS sat · ${periodLabel.toLowerCase()}`}
               value={fmtNumber(totalSat)}
               sub="sessions held"
@@ -62,7 +80,7 @@ export function ConsultantsView({
             <Stat
               label="DS sat rate"
               value={showUp == null ? "—" : `${showUp}%`}
-              sub="sat / booked"
+              sub="sat / scheduled"
               testId="consultant-showup"
               accent
             />
@@ -95,6 +113,7 @@ export function ConsultantsView({
                 <TableHead>Consultant</TableHead>
                 <TableHead className="text-right">Leads</TableHead>
                 <TableHead className="text-right">DS booked</TableHead>
+                <TableHead className="text-right">DS scheduled</TableHead>
                 <TableHead className="text-right">DS sat</TableHead>
                 <TableHead className="text-right">DS sat %</TableHead>
                 <TableHead className="text-right">Sold</TableHead>
@@ -105,7 +124,7 @@ export function ConsultantsView({
               {loading || !d
                 ? Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={7}>
+                      <TableCell colSpan={8}>
                         <Skeleton className="h-5 w-full" />
                       </TableCell>
                     </TableRow>
@@ -118,6 +137,9 @@ export function ConsultantsView({
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNumber(c.dsBooked)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(c.dsScheduled)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNumber(c.dsSat)}
@@ -175,7 +197,12 @@ export function ConsultantsView({
         ) : (
           <div className="grid gap-4 md:grid-cols-2">
             {d.consultants
-              .filter((c) => c.bookings.length > 0 || c.sats.length > 0)
+              .filter(
+                (c) =>
+                  c.bookings.length > 0 ||
+                  c.scheduleds.length > 0 ||
+                  c.sats.length > 0,
+              )
               .map((c) => (
                 <Card
                   key={c.name}
@@ -186,10 +213,11 @@ export function ConsultantsView({
                     <span className="font-semibold">{c.name}</span>
                     <span className="text-xs text-muted-foreground tabular-nums">
                       {fmtNumber(c.bookings.length)} booked ·{" "}
+                      {fmtNumber(c.scheduleds.length)} scheduled ·{" "}
                       {fmtNumber(c.sats.length)} sat
                     </span>
                   </div>
-                  <div className="grid grid-cols-2 gap-4">
+                  <div className="grid grid-cols-3 gap-4">
                     {/* Bookings made */}
                     <div className="flex flex-col gap-2">
                       <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -209,6 +237,31 @@ export function ConsultantsView({
                               <span className="truncate">{b.client}</span>
                               <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
                                 {fmtDateShort(b.date)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    {/* Scheduled to be held this period */}
+                    <div className="flex flex-col gap-2">
+                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                        <CalendarClock className="h-3.5 w-3.5" />
+                        Scheduled ({fmtNumber(c.scheduleds.length)})
+                      </div>
+                      {c.scheduleds.length === 0 ? (
+                        <span className="text-sm text-muted-foreground">—</span>
+                      ) : (
+                        <ul className="flex flex-col gap-1">
+                          {c.scheduleds.map((s, i) => (
+                            <li
+                              key={`${s.client}-${i}`}
+                              className="flex items-baseline justify-between gap-2 text-sm"
+                              data-testid={`scheduled-${c.name}-${i}`}
+                            >
+                              <span className="truncate">{s.client}</span>
+                              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                                {fmtDateShort(s.date)}
                               </span>
                             </li>
                           ))}

@@ -630,6 +630,39 @@ async function discoverySessions(startIso: string, endIso: string) {
     return !!st && st >= startIso && st < endIso;
   });
 
+  // SCHEDULED = unique DS SCHEDULED TO BE HELD in the window (held-date basis),
+  // regardless of when booked or whether they sat. This is the correct
+  // denominator for show-up rate (sat / scheduled) per Ben. Dedupe by the SAME
+  // key as sat (associated deal = unique person; fall back to meeting id when no
+  // deal) so a person with two sessions in the week counts once and the show-up
+  // % can't exceed 100%. We attribute each scheduled session to the booking
+  // consultant using the same resolveBooker logic. scheduled = distinct keys.
+  const scheduledByConsultant: Record<string, number> = {};
+  const scheduledsByConsultant: Record<string, { client: string; date: string }[]> = {};
+  const scheduledKeys = new Set<string>();
+  const schedKey = (m: any): string => {
+    const dids = dealAssoc[m.id] || [];
+    return dids.length ? `d:${dids.slice().sort()[0]}` : `m:${m.id}`;
+  };
+  for (const m of started
+    .slice()
+    .sort((a, b) =>
+      (a.properties.hs_meeting_start_time || "").localeCompare(
+        b.properties.hs_meeting_start_time || "",
+      ),
+    )) {
+    const k = schedKey(m);
+    if (scheduledKeys.has(k)) continue; // same person, 2 sessions this week
+    scheduledKeys.add(k);
+    const name = resolveBooker(m.id);
+    scheduledByConsultant[name] = (scheduledByConsultant[name] || 0) + 1;
+    (scheduledsByConsultant[name] ||= []).push({
+      client: clientFromTitle(m.properties.hs_meeting_title || ""),
+      date: m.properties.hs_meeting_start_time || "",
+    });
+  }
+  const scheduled = scheduledKeys.size;
+
   // Sat = the number of UNIQUE PEOPLE who attended a DS in the window. Rules,
   // per Ben (ICG) — this is a core business stat and consultants are paid on it,
   // so it must be exact:
@@ -684,15 +717,20 @@ async function discoverySessions(startIso: string, endIso: string) {
     bookingsByConsultant[k].sort((a, b) => a.date.localeCompare(b.date));
   for (const k of Object.keys(satsByConsultant))
     satsByConsultant[k].sort((a, b) => a.date.localeCompare(b.date));
+  for (const k of Object.keys(scheduledsByConsultant))
+    scheduledsByConsultant[k].sort((a, b) => a.date.localeCompare(b.date));
 
   return {
     booked,
     started: started.length,
+    scheduled,
     sat,
     bookedByConsultant,
     satByConsultant,
+    scheduledByConsultant,
     bookingsByConsultant,
     satsByConsultant,
+    scheduledsByConsultant,
     bookedByStrategist,
     satByStrategist,
     dsDayByDeal,
@@ -901,6 +939,7 @@ interface FunnelWindow {
   };
   dsBooked: number;
   dsStarted: number;
+  dsScheduled: number;
   dsSat: number;
   membershipsSold: number;
   membershipTiers: Record<string, number>;
@@ -925,6 +964,7 @@ async function salesFunnel(range: PeriodRange) {
       totals: contact.totals,
       dsBooked: ds.booked,
       dsStarted: ds.started,
+      dsScheduled: ds.scheduled,
       dsSat: ds.sat,
       membershipsSold: sold.total,
       membershipTiers: sold.tiers,
@@ -934,8 +974,10 @@ async function salesFunnel(range: PeriodRange) {
       window,
       bookedByConsultant: ds.bookedByConsultant,
       satByConsultant: ds.satByConsultant,
+      scheduledByConsultant: ds.scheduledByConsultant,
       bookingsByConsultant: ds.bookingsByConsultant,
       satsByConsultant: ds.satsByConsultant,
+      scheduledsByConsultant: ds.scheduledsByConsultant,
       bookedByStrategist: ds.bookedByStrategist,
       satByStrategist: ds.satByStrategist,
       funnelConsultants: contact.consultants,
@@ -971,6 +1013,8 @@ async function consultantTeam(
   satByConsultant: Record<string, number> = {},
   bookingsByConsultant: Record<string, { client: string; date: string }[]> = {},
   satsByConsultant: Record<string, { client: string; date: string }[]> = {},
+  scheduledByConsultant: Record<string, number> = {},
+  scheduledsByConsultant: Record<string, { client: string; date: string }[]> = {},
 ) {
   // Memberships sold per booking consultant (deals created in the period).
   const deals = await hubspot.searchDeals(
@@ -1011,21 +1055,27 @@ async function consultantTeam(
   return names
     .map((name) => {
       const dsBooked = bookedByConsultant[name] || 0;
+      const dsScheduled = scheduledByConsultant[name] || 0;
       const dsSat = satByConsultant[name] || 0;
-      // Show-up % = sat / booked. Period-based (booked and sat can be different
-      // cohorts within a window for boundary sessions — see discoverySessions).
-      // Null when nothing was booked so the UI can show "—" instead of 0%.
-      const showUp = dsBooked > 0 ? Math.round((dsSat / dsBooked) * 100) : null;
+      // Show-up % = sat / SCHEDULED (per Ben). Scheduled = DS scheduled to be
+      // HELD in the window (held-date basis), so it's the true denominator: of
+      // the sessions meant to happen this week, what share actually sat. Both
+      // sat and scheduled dedupe by person, so show-up can't exceed 100%. Null
+      // when nothing was scheduled so the UI shows "—" instead of 0%.
+      const showUp =
+        dsScheduled > 0 ? Math.round((dsSat / dsScheduled) * 100) : null;
       return {
         name,
         deals: leadsByConsultant[name] || 0, // "deals" field renders as Leads
         dsBooked,
+        dsScheduled,
         dsSat,
         showUp,
         sold: soldByConsultant[name] || 0,
         // Client-level drill-down lists for this consultant (same booker
         // resolution + dedupe as the counts above).
         bookings: bookingsByConsultant[name] || [],
+        scheduleds: scheduledsByConsultant[name] || [],
         sats: satsByConsultant[name] || [],
       };
     })
@@ -1562,6 +1612,10 @@ export async function buildDashboard(periodKey?: string) {
     funnel.ok && funnel.bookingsByConsultant ? funnel.bookingsByConsultant : {};
   const satsByConsultant =
     funnel.ok && funnel.satsByConsultant ? funnel.satsByConsultant : {};
+  const scheduledByConsultant =
+    funnel.ok && funnel.scheduledByConsultant ? funnel.scheduledByConsultant : {};
+  const scheduledsByConsultant =
+    funnel.ok && funnel.scheduledsByConsultant ? funnel.scheduledsByConsultant : {};
   const funnelConsultants =
     funnel.ok && funnel.funnelConsultants ? funnel.funnelConsultants : [];
   const soldByStrategist =
@@ -1596,6 +1650,8 @@ export async function buildDashboard(periodKey?: string) {
       satByConsultant,
       bookingsByConsultant,
       satsByConsultant,
+      scheduledByConsultant,
+      scheduledsByConsultant,
     ),
     strategistTeam(
       range,

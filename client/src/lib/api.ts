@@ -87,10 +87,12 @@ export interface Dashboard {
     name: string;
     deals: number;
     dsBooked: number;
+    dsScheduled: number;
     dsSat: number;
     showUp: number | null;
     sold: number;
     bookings: { client: string; date: string }[];
+    scheduleds: { client: string; date: string }[];
     sats: { client: string; date: string }[];
   }[];
   strategists: {
