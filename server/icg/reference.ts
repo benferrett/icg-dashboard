@@ -259,6 +259,17 @@ export const CONTRACT_UC_PIPELINES = [
   "1841864138", // 2 Part - Construction
 ];
 
+// Pipelines that can hold an EOI ("EOI Signed, EOI Paid") deal. The Property
+// Sales pipeline shares the SAME EOI stage id (3051561412) as the Contract
+// pipeline, so a client who signs/pays an EOI while still on the Property Sales
+// board is a real EOI sale and MUST be counted. We pull it alongside the
+// Contract pipeline so those EOIs are never missed. Property Sales deals only
+// ever reach the EOI milestone here (they have no UC / settlement stages), so
+// including the pipeline cannot inflate UC.
+export const CONTRACT_EOI_PIPELINES = [
+  "1527507417", // Property Sales Pipeline
+];
+
 // Stage explicitly excluded from the contract funnel (lost / cancelled).
 export const CONTRACT_EXCLUDE_STAGES = ["3112795614"]; // EOI Cancelled
 

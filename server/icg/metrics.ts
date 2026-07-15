@@ -17,6 +17,7 @@ import {
   CONTRACT_PIPELINE,
   CONTRACT_FUNNEL_STEPS,
   CONTRACT_UC_PIPELINES,
+  CONTRACT_EOI_PIPELINES,
   CONTRACT_EXCLUDE_STAGES,
   CONTRACT_STAGE_TO_STEP,
   CONTRACT_EOI_STAGES,
@@ -1278,13 +1279,30 @@ async function contracts(range: PeriodRange) {
     "strategist_assigned",
   ];
 
-  // Pull Contract pipeline + both settlement pipelines in one search (OR groups).
+  // Pull Contract pipeline + both settlement pipelines (whole pipeline each),
+  // PLUS — from the Property Sales pipeline — ONLY deals sitting at the shared
+  // EOI stage (3051561412). Property Sales EOIs are real EOI sales and must be
+  // counted; its other early stages (Property Opportunity, Ready 6-12mo, etc.)
+  // are not part of the contract funnel, so we filter them out at query time to
+  // avoid dragging in hundreds of irrelevant deals. filterGroups are OR'd; the
+  // filters within the Property Sales group are AND'd (pipeline AND stage).
   const pipelineIds = [CONTRACT_PIPELINE, ...CONTRACT_UC_PIPELINES];
+  const filterGroups: any[] = pipelineIds.map((id) => ({
+    filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
+  }));
+  for (const psId of CONTRACT_EOI_PIPELINES) {
+    for (const eoiStage of CONTRACT_EOI_STAGES) {
+      filterGroups.push({
+        filters: [
+          { propertyName: "pipeline", operator: "EQ", value: psId },
+          { propertyName: "dealstage", operator: "EQ", value: eoiStage },
+        ],
+      });
+    }
+  }
   const deals = await hubspot.searchDeals(
     {
-      filterGroups: pipelineIds.map((id) => ({
-        filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
-      })),
+      filterGroups,
       properties: [...baseProps, ...enteredProps],
       sorts: [{ propertyName: "hs_lastmodifieddate", direction: "DESCENDING" }],
     },
