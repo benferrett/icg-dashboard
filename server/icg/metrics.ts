@@ -1424,9 +1424,14 @@ async function contracts(range: PeriodRange) {
     const pid = props.pipeline || "";
     const isSettlement = CONTRACT_UC_PIPELINES.includes(pid);
     const owner = dealStrategist[d.id] || "Unattributed";
+    // Drop obvious test/dummy records by name (e.g. "Test-Raul") — these can be
+    // attributed to a real strategist yet are not genuine EOI/UC sales. Matches
+    // the skill's treatment of "... test ..." records as non-real.
+    const dealNameLc = String(props.dealname || "").toLowerCase();
+    const isTestRecord = /\btest\b/.test(dealNameLc);
     // Drop genuinely unattributed test/fake records (no real strategist, no
     // client activity) so they don't inflate EOI / UC milestone counts.
-    const isFake = owner === "Unattributed";
+    const isFake = owner === "Unattributed" || isTestRecord;
 
     const amt = num(props.amount_in_home_currency) || num(props.amount);
 
