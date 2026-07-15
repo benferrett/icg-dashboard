@@ -189,13 +189,13 @@ export function ConsultantsView({
         icon={<ListChecks className="h-4 w-4 text-primary" />}
       >
         {loading || !d ? (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex flex-col gap-4">
             {Array.from({ length: 4 }).map((_, i) => (
               <Skeleton key={i} className="h-48 rounded-lg" />
             ))}
           </div>
         ) : (
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="flex flex-col gap-4">
             {d.consultants
               .filter(
                 (c) =>
@@ -299,7 +299,7 @@ export function ConsultantsView({
             {d.consultants.every(
               (c) => c.bookings.length === 0 && c.sats.length === 0,
             ) && (
-              <div className="text-center text-muted-foreground text-sm py-6 md:col-span-2">
+              <div className="text-center text-muted-foreground text-sm py-6">
                 No bookings in this period.
               </div>
             )}
