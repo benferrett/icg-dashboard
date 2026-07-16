@@ -416,11 +416,12 @@ async function contactFunnel(startIso: string, endIso: string) {
 }
 
 // ---- TALK TIME -------------------------------------------------------------
-// Total CONNECTED talk time per booking consultant for the period. We query the
-// calls object directly by hs_timestamp (the call's own time), attribute each
-// call to a consultant via its hubspot_owner_id, and sum hs_call_duration (ms)
-// for calls that CONNECTED (duration >= CONNECT_MS, the same >=30s threshold the
-// connect-rate uses). This measures real conversation time, not dial time.
+// Total talk time per booking consultant for the period. We query the calls
+// object directly by hs_timestamp (the call's own time), attribute each call to
+// a consultant via its hubspot_owner_id, and sum hs_call_duration (ms) across
+// ALL calls of any length. NOTE: talk time intentionally does NOT apply the
+// >=30s CONNECT_MS threshold that connect-rate uses — Ben wants 100% of call
+// time here, including short calls.
 //
 // Calls are high-volume (a single week can be ~3k, a year ~50k), well past
 // HubSpot's 10k /search pagination cap, so hubspot.searchAllByTime day-slices
@@ -435,13 +436,13 @@ async function talkTimeByConsultant(startIso: string, endIso: string) {
     ["hs_call_duration", "hubspot_owner_id", "hs_timestamp"],
     "hs_timestamp",
   );
-  // name -> connected talk time in ms
+  // name -> total talk time in ms (all calls, any duration)
   const talkMsByConsultant: Record<string, number> = {};
   for (const c of calls) {
     const owner = c.properties.hubspot_owner_id;
     if (!owner || !isBookingConsultant(owner)) continue; // consultants only
     const ms = num(c.properties.hs_call_duration);
-    if (ms < CONNECT_MS) continue; // connected calls only (>= 30s)
+    if (ms <= 0) continue; // skip zero/blank durations only
     const name = ownerName(owner);
     talkMsByConsultant[name] = (talkMsByConsultant[name] || 0) + ms;
   }

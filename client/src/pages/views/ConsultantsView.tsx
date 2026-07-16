@@ -88,7 +88,7 @@ export function ConsultantsView({
             <Stat
               label={`Talk time · ${periodLabel.toLowerCase()}`}
               value={fmtDuration(totalTalkMs)}
-              sub="connected calls (>30s)"
+              sub="all calls · total"
               testId="consultant-total-talktime"
             />
             <Stat
