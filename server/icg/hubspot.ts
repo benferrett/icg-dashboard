@@ -111,6 +111,70 @@ async function searchObjects(
   return out;
 }
 
+// Retrieve ALL records for a high-volume object (e.g. calls) across a time
+// window, working around two HubSpot /search quirks:
+//   1. The `after` token only pages to 10,000 records per query.
+//   2. A rolling GTE-timestamp cursor silently drops records at page
+//      boundaries (records sharing the boundary second are lost), so paged
+//      counts came back far below the reported total.
+// Fix: slice the window into DAY-sized sub-windows (each well under the 10k
+// cap and small enough that HubSpot returns the exact reported total), then
+// page each day fully with the standard `after` token. Verified: per-day
+// `paged === reported total` for the calls object. Dedupes by id across the
+// (inclusive/exclusive) day boundaries for safety.
+async function searchAllByTime(
+  objectType: string,
+  startIso: string,
+  endIso: string,
+  properties: string[],
+  timeProp = "hs_timestamp",
+  hardCap = 200000,
+): Promise<Deal[]> {
+  const seen = new Set<string>();
+  const out: Deal[] = [];
+  const DAY_MS = 24 * 60 * 60 * 1000;
+  const endMs = Date.parse(endIso);
+  let winStart = Date.parse(startIso);
+  while (winStart < endMs && out.length < hardCap) {
+    const winEnd = Math.min(winStart + DAY_MS, endMs);
+    const startStr = new Date(winStart).toISOString();
+    const endStr = new Date(winEnd).toISOString();
+    let after: string | undefined = undefined;
+    // Page this day fully via the `after` token (reliable within a sub-10k
+    // window). searchPost already backs off on 429.
+    while (out.length < hardCap) {
+      const json: any = await searchPost(
+        {
+          filterGroups: [
+            {
+              filters: [
+                { propertyName: timeProp, operator: "GTE", value: startStr },
+                { propertyName: timeProp, operator: "LT", value: endStr },
+              ],
+            },
+          ],
+          properties,
+          sorts: [{ propertyName: timeProp, direction: "ASCENDING" }],
+          limit: 100,
+          after,
+        },
+        objectType,
+      );
+      const rows: Deal[] = json.results || [];
+      for (const r of rows) {
+        if (!seen.has(r.id)) {
+          seen.add(r.id);
+          out.push(r);
+        }
+      }
+      after = json.paging?.next?.after;
+      if (!after) break;
+    }
+    winStart = winEnd;
+  }
+  return out;
+}
+
 // --- Batch helpers (associations v4 + object batch read) ------------------
 // Plain (non-search) endpoints are not rate-limited like /search, but we still
 // route through the proxy via apiFetch.
@@ -257,6 +321,7 @@ async function countContacts(filterGroups: any[]): Promise<number> {
 export const hubspot = {
   searchDeals,
   searchObjects,
+  searchAllByTime,
   countDeals,
   countContacts,
   batchAssociations,

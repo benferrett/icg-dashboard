@@ -415,6 +415,39 @@ async function contactFunnel(startIso: string, endIso: string) {
   return { consultants, totals };
 }
 
+// ---- TALK TIME -------------------------------------------------------------
+// Total CONNECTED talk time per booking consultant for the period. We query the
+// calls object directly by hs_timestamp (the call's own time), attribute each
+// call to a consultant via its hubspot_owner_id, and sum hs_call_duration (ms)
+// for calls that CONNECTED (duration >= CONNECT_MS, the same >=30s threshold the
+// connect-rate uses). This measures real conversation time, not dial time.
+//
+// Calls are high-volume (a single week can be ~3k, a year ~50k), well past
+// HubSpot's 10k /search pagination cap, so hubspot.searchAllByTime day-slices
+// the window and pages each day fully via the `after` token (verified to
+// return each day's exact count). Attribution is by call OWNER (not the
+// associated contact) because the consultant who made the call owns it.
+async function talkTimeByConsultant(startIso: string, endIso: string) {
+  const calls = await hubspot.searchAllByTime(
+    "calls",
+    startIso,
+    endIso,
+    ["hs_call_duration", "hubspot_owner_id", "hs_timestamp"],
+    "hs_timestamp",
+  );
+  // name -> connected talk time in ms
+  const talkMsByConsultant: Record<string, number> = {};
+  for (const c of calls) {
+    const owner = c.properties.hubspot_owner_id;
+    if (!owner || !isBookingConsultant(owner)) continue; // consultants only
+    const ms = num(c.properties.hs_call_duration);
+    if (ms < CONNECT_MS) continue; // connected calls only (>= 30s)
+    const name = ownerName(owner);
+    talkMsByConsultant[name] = (talkMsByConsultant[name] || 0) + ms;
+  }
+  return talkMsByConsultant;
+}
+
 // Discovery sessions: booked = DS-titled meeting created in window;
 // sat = DS meeting that started in window, validated via an associated deal
 // sitting in any DS Sat-* stage (the meeting outcome field is unreliable and is
@@ -952,9 +985,10 @@ async function salesFunnel(range: PeriodRange) {
   try {
     // ds must resolve before membershipsSold so we can pass dsDayByDeal for the
     // on-session vs follow-up classification. contactFunnel runs in parallel.
-    const [contact, ds] = await Promise.all([
+    const [contact, ds, talkTime] = await Promise.all([
       contactFunnel(range.start, range.end),
       discoverySessions(range.start, range.end),
+      talkTimeByConsultant(range.start, range.end),
     ]);
     const sold = await membershipsSold(range.start, range.end, ds.dsDayByDeal);
     const window: FunnelWindow = {
@@ -990,6 +1024,7 @@ async function salesFunnel(range: PeriodRange) {
         followUp: sold.followUpTotal,
       },
       soldByChannel: sold.byChannel,
+      talkTimeByConsultant: talkTime,
     };
   } catch (err: any) {
     return { ok: false as const, error: err?.message || "Sales funnel data unavailable" };
@@ -1016,6 +1051,7 @@ async function consultantTeam(
   satsByConsultant: Record<string, { client: string; date: string }[]> = {},
   scheduledByConsultant: Record<string, number> = {},
   scheduledsByConsultant: Record<string, { client: string; date: string }[]> = {},
+  talkTimeByConsultant: Record<string, number> = {},
 ) {
   // Memberships sold per booking consultant (deals created in the period).
   const deals = await hubspot.searchDeals(
@@ -1073,6 +1109,9 @@ async function consultantTeam(
         dsSat,
         showUp,
         sold: soldByConsultant[name] || 0,
+        // Total connected talk time (ms) for the period, from calls this
+        // consultant owns with duration >= 30s. Rendered as h:mm in the UI.
+        talkMs: talkTimeByConsultant[name] || 0,
         // Client-level drill-down lists for this consultant (same booker
         // resolution + dedupe as the counts above).
         bookings: bookingsByConsultant[name] || [],
@@ -1639,6 +1678,8 @@ export async function buildDashboard(periodKey?: string) {
     funnel.ok && funnel.scheduledByConsultant ? funnel.scheduledByConsultant : {};
   const scheduledsByConsultant =
     funnel.ok && funnel.scheduledsByConsultant ? funnel.scheduledsByConsultant : {};
+  const talkTimeByConsultant =
+    funnel.ok && funnel.talkTimeByConsultant ? funnel.talkTimeByConsultant : {};
   const funnelConsultants =
     funnel.ok && funnel.funnelConsultants ? funnel.funnelConsultants : [];
   const soldByStrategist =
@@ -1675,6 +1716,7 @@ export async function buildDashboard(periodKey?: string) {
       satsByConsultant,
       scheduledByConsultant,
       scheduledsByConsultant,
+      talkTimeByConsultant,
     ),
     strategistTeam(
       range,

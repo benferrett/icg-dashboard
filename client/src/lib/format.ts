@@ -24,6 +24,18 @@ export function fmtPct(n: number, digits = 0): string {
   return `${n.toFixed(digits)}%`;
 }
 
+// Talk time from milliseconds -> compact "Xh Ym" (or "Ym" under an hour, "Ys"
+// under a minute). Used for consultant connected talk time.
+export function fmtDuration(ms: number): string {
+  const totalSec = Math.round((ms || 0) / 1000);
+  if (totalSec <= 0) return "0m";
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m`;
+  return `${totalSec}s`;
+}
+
 export function fmtDateShort(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleDateString("en-AU", { day: "numeric", month: "short" });

@@ -1,5 +1,5 @@
 import { Dashboard } from "@/lib/api";
-import { fmtNumber, fmtDateShort } from "@/lib/format";
+import { fmtNumber, fmtDateShort, fmtDuration } from "@/lib/format";
 import { Section } from "@/components/dashboard/Section";
 import { Stat } from "@/components/dashboard/Stat";
 import { Card } from "@/components/ui/card";
@@ -39,6 +39,7 @@ export function ConsultantsView({
     d?.consultants.reduce((s, c) => s + c.dsScheduled, 0) ?? 0;
   const totalSat = d?.consultants.reduce((s, c) => s + c.dsSat, 0) ?? 0;
   const totalSold = d?.consultants.reduce((s, c) => s + c.sold, 0) ?? 0;
+  const totalTalkMs = d?.consultants.reduce((s, c) => s + (c.talkMs || 0), 0) ?? 0;
   // Show-up rate = sat / SCHEDULED (of the sessions meant to be held this
   // period, what share sat).
   const showUp = totalScheduled
@@ -51,9 +52,9 @@ export function ConsultantsView({
   return (
     <div className="flex flex-col gap-8">
       {/* KPI strip */}
-      <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
         {loading || !d ? (
-          Array.from({ length: 6 }).map((_, i) => (
+          Array.from({ length: 7 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-lg" />
           ))
         ) : (
@@ -83,6 +84,12 @@ export function ConsultantsView({
               sub="sat / scheduled"
               testId="consultant-showup"
               accent
+            />
+            <Stat
+              label={`Talk time · ${periodLabel.toLowerCase()}`}
+              value={fmtDuration(totalTalkMs)}
+              sub="connected calls (>30s)"
+              testId="consultant-total-talktime"
             />
             <Stat
               label={`Memberships sold · ${periodLabel.toLowerCase()}`}
@@ -116,6 +123,7 @@ export function ConsultantsView({
                 <TableHead className="text-right">DS scheduled</TableHead>
                 <TableHead className="text-right">DS sat</TableHead>
                 <TableHead className="text-right">DS sat %</TableHead>
+                <TableHead className="text-right">Talk time</TableHead>
                 <TableHead className="text-right">Sold</TableHead>
                 <TableHead className="text-right">Conversion %</TableHead>
               </TableRow>
@@ -124,7 +132,7 @@ export function ConsultantsView({
               {loading || !d
                 ? Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={8}>
+                      <TableCell colSpan={9}>
                         <Skeleton className="h-5 w-full" />
                       </TableCell>
                     </TableRow>
@@ -155,6 +163,9 @@ export function ConsultantsView({
                             {c.showUp}%
                           </Badge>
                         )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">
+                        {fmtDuration(c.talkMs || 0)}
                       </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNumber(c.sold)}

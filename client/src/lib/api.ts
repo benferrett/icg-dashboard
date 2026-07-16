@@ -91,6 +91,7 @@ export interface Dashboard {
     dsSat: number;
     showUp: number | null;
     sold: number;
+    talkMs: number;
     bookings: { client: string; date: string }[];
     scheduleds: { client: string; date: string }[];
     sats: { client: string; date: string }[];
