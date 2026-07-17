@@ -140,7 +140,10 @@ export function BusinessPerformanceView({ token }: { token: string }) {
                       tick={{ fontSize: 11 }}
                       className="text-muted-foreground"
                       allowDecimals={false}
-                      width={36}
+                      width={44}
+                      tickFormatter={(v: number) =>
+                        v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : `${v}`
+                      }
                     />
                     <Tooltip content={<ChartTooltip />} />
                     <Legend
