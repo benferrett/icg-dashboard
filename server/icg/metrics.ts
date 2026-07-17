@@ -25,6 +25,8 @@ import {
   isStrategistOwner,
   STRATEGIST_OWNERS,
   STRATEGIST_NAME_TOKENS,
+  bookingSourceOf,
+  BOOKING_SOURCE_PROPS,
 } from "./reference";
 
 function isoDaysAgo(days: number): string {
@@ -580,15 +582,25 @@ async function discoverySessions(startIso: string, endIso: string) {
     const contactAssoc = await contactAssocPromise;
     const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
     const allContactIds = Array.from(new Set(Object.values(contactAssoc).flat()));
-    const [dp, contactHist] = await Promise.all([
+    const [dp, contactHist, contactSrc] = await Promise.all([
       allDealIds.length
         ? hubspot.batchRead("deals", allDealIds, ["booking_consultant", "hubspot_owner_id", "dealstage"])
         : Promise.resolve({} as Record<string, any>),
       allContactIds.length
         ? hubspot.batchReadWithHistory("contacts", allContactIds, ["hubspot_owner_id"])
         : Promise.resolve({} as Record<string, any>),
+      allContactIds.length
+        ? hubspot.batchRead("contacts", allContactIds, BOOKING_SOURCE_PROPS)
+        : Promise.resolve({} as Record<string, any>),
     ]);
     dealProps = dp;
+    // A booking only counts if its associated contact's lead source is EMBR or
+    // META. If a meeting has multiple contacts, it qualifies when ANY associated
+    // contact is EMBR/META.
+    const meetingIsEmbrOrMeta = (meetingId: string): boolean => {
+      const cids = contactAssoc[meetingId] || [];
+      return cids.some((cid) => bookingSourceOf(contactSrc[cid]) !== null);
+    };
     // Resolve the genuine booking consultant for a DS meeting:
     //   1) the associated deal's booking_consultant, if a real consultant; else
     //   2) the earliest booking-consultant owner in the contact's owner history;
@@ -639,6 +651,7 @@ async function discoverySessions(startIso: string, endIso: string) {
           b.properties.hs_createdate || "",
         ),
       )
+      .filter((m) => meetingIsEmbrOrMeta(m.id)) // only EMBR/META lead sources
       .filter((m) => {
         const k = contactKey(m);
         if (seenBookedKeys.has(k)) return false; // rescheduled dup → skip
@@ -1763,15 +1776,30 @@ export async function businessPerformance(granularityRaw?: string) {
       hubspot.batchAssociations("meetings", "deals", dsIds),
     ]);
     const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
-    const dealProps = allDealIds.length
-      ? await hubspot.batchRead("deals", allDealIds, ["dealstage"])
-      : {};
+    const allContactIds = Array.from(
+      new Set(Object.values(contactAssoc).flat()),
+    );
+    const [dealProps, contactSrc] = await Promise.all([
+      allDealIds.length
+        ? hubspot.batchRead("deals", allDealIds, ["dealstage"])
+        : Promise.resolve({} as Record<string, any>),
+      allContactIds.length
+        ? hubspot.batchRead("contacts", allContactIds, BOOKING_SOURCE_PROPS)
+        : Promise.resolve({} as Record<string, any>),
+    ]);
+    // A booking counts only if an associated contact's lead source is EMBR/META.
+    const meetingIsEmbrOrMeta = (meetingId: string): boolean => {
+      const cids = contactAssoc[meetingId] || [];
+      return cids.some((cid) => bookingSourceOf(contactSrc[cid]) !== null);
+    };
 
     // BOOKINGS: dedupe by contact per bucket. Sort ascending by createdate so
     // the FIRST (earliest) created meeting per contact is the one we keep.
+    // Only EMBR/META lead sources qualify as bookings.
     const seenBooked: Set<string>[] = buckets.map(() => new Set<string>());
     const created = dsMeetings
       .filter((m: any) => bucketOf(parseT(m.properties.hs_createdate)) >= 0)
+      .filter((m: any) => meetingIsEmbrOrMeta(m.id))
       .sort((a: any, b: any) =>
         (a.properties.hs_createdate || "").localeCompare(
           b.properties.hs_createdate || "",

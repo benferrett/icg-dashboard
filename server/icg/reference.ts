@@ -351,3 +351,34 @@ export function sourceLabel(id?: string | null): string {
   if (!id) return "Unknown";
   return SOURCE_LABELS[id] || id;
 }
+
+// ---- Booking lead-source attribution ----------------------------------------
+// A Discovery Session only counts as a BOOKING if the associated contact's lead
+// source is EMBR or META (paid social). Every other source is excluded:
+//   * EMBR  = contact tagged lead_source == "EMBR" (equivalently embr_lead_id set)
+//   * META  = hs_analytics_source == "PAID_SOCIAL" (Facebook/Instagram ads)
+//   * EXCLUDE = DIRECT_TRAFFIC (strategist personal booking links, e.g.
+//               meetings-ap1.hubspot.com/{strategist}/intro-to-icg), OFFLINE,
+//               ORGANIC_SEARCH, REFERRALS, and anything else.
+// Returns "EMBR", "META", or null (excluded).
+export function bookingSourceOf(
+  contactProps?: {
+    lead_source?: string | null;
+    embr_lead_id?: string | null;
+    hs_analytics_source?: string | null;
+  } | null,
+): "EMBR" | "META" | null {
+  if (!contactProps) return null;
+  if (contactProps.lead_source === "EMBR" || contactProps.embr_lead_id) {
+    return "EMBR";
+  }
+  if (contactProps.hs_analytics_source === "PAID_SOCIAL") return "META";
+  return null;
+}
+
+// The contact properties needed to classify a booking's lead source.
+export const BOOKING_SOURCE_PROPS = [
+  "lead_source",
+  "embr_lead_id",
+  "hs_analytics_source",
+];
