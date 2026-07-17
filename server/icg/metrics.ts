@@ -1,6 +1,6 @@
 // Aggregation logic that turns raw HubSpot deals into the dashboard's four sections.
 import { hubspot } from "./hubspot";
-import { PeriodRange, parsePeriod } from "./period";
+import { PeriodRange, parsePeriod, buildBuckets, Granularity } from "./period";
 import {
   ownerName,
   pipelineName,
@@ -1641,6 +1641,261 @@ async function financial() {
     dealCount: deals.length,
     byPipeline: Object.entries(byPipeline).map(([name, v]) => ({ name, ...v })),
     monthly,
+  };
+}
+
+// ---- BUSINESS PERFORMANCE (12-bucket trend across the 6 headline metrics) --
+// Produces a week-by-week OR month-by-month series over the trailing 12 units
+// for: leads, bookings (DS booked), sats (DS attended), members (memberships
+// sold), EOIs, and UC. Rather than run the heavy per-consultant / per-
+// strategist attribution 12×, we pull each metric's underlying dated records
+// ONCE across the whole window and bucket them by AEST date. Only TOTALS per
+// bucket are needed, which keeps each definition faithful to the headline
+// dashboard while staying fast.
+export async function businessPerformance(granularityRaw?: string) {
+  const granularity: Granularity = granularityRaw === "month" ? "month" : "week";
+  const buckets = buildBuckets(granularity, 12);
+  const winStart = buckets[0].start;
+  const winEnd = buckets[buckets.length - 1].end;
+  const winStartMs = +new Date(winStart);
+  const winEndMs = +new Date(winEnd);
+
+  // Assign a timestamp (ms) to its bucket index, or -1 if outside the window.
+  const bounds = buckets.map((b) => ({ s: +new Date(b.start), e: +new Date(b.end) }));
+  const bucketOf = (t: number): number => {
+    if (isNaN(t) || t < winStartMs || t >= winEndMs) return -1;
+    // Buckets are contiguous + ordered, so a linear/binary scan is fine (12).
+    for (let i = 0; i < bounds.length; i++) {
+      if (t >= bounds[i].s && t < bounds[i].e) return i;
+    }
+    return -1;
+  };
+  const parseT = (s?: string | null) => (s ? +new Date(s) : NaN);
+
+  const zeros = () => new Array(buckets.length).fill(0);
+  const series: Record<string, number[]> = {
+    leads: zeros(),
+    bookings: zeros(),
+    sats: zeros(),
+    members: zeros(),
+    eois: zeros(),
+    uc: zeros(),
+  };
+
+  // ---- LEADS: contacts by createdate ---------------------------------------
+  const leadsP = (async () => {
+    const contacts = await hubspot.searchAllByTime(
+      "contacts",
+      winStart,
+      winEnd,
+      ["createdate"],
+      "createdate",
+    );
+    for (const c of contacts) {
+      const bi = bucketOf(parseT(c.properties.createdate));
+      if (bi >= 0) series.leads[bi]++;
+    }
+  })();
+
+  // ---- BOOKINGS + SATS: Discovery Session meetings -------------------------
+  // Bookings = unique DS meetings CREATED in a bucket, deduped by associated
+  // contact (a reschedule = same contact, multiple created meetings = one DS).
+  // Sats = DS meetings HELD (hs_meeting_start_time) in a bucket whose associated
+  // deal sits in a DS Sat-* stage, deduped by deal. Pull both created-in-window
+  // and held-in-window DS meetings, then classify.
+  const dsP = (async () => {
+    const [createdMeetings, heldMeetings] = await Promise.all([
+      hubspot.searchAllByTime(
+        "meetings",
+        winStart,
+        winEnd,
+        ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time"],
+        "hs_createdate",
+      ),
+      hubspot.searchAllByTime(
+        "meetings",
+        winStart,
+        winEnd,
+        ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time"],
+        "hs_meeting_start_time",
+      ),
+    ]);
+    const isDs = (m: any) =>
+      (m.properties.hs_meeting_title || "").startsWith(DS_TITLE_PREFIX);
+    // Union of all DS meetings we touched (dedupe by id) so one association
+    // fetch covers both booked + sat classification.
+    const byId: Record<string, any> = {};
+    for (const m of [...createdMeetings, ...heldMeetings]) {
+      if (isDs(m)) byId[m.id] = m;
+    }
+    const dsMeetings = Object.values(byId);
+    if (!dsMeetings.length) return;
+    const dsIds = dsMeetings.map((m: any) => m.id);
+    const [contactAssoc, dealAssoc] = await Promise.all([
+      hubspot.batchAssociations("meetings", "contacts", dsIds),
+      hubspot.batchAssociations("meetings", "deals", dsIds),
+    ]);
+    const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
+    const dealProps = allDealIds.length
+      ? await hubspot.batchRead("deals", allDealIds, ["dealstage"])
+      : {};
+
+    // BOOKINGS: dedupe by contact per bucket. Sort ascending by createdate so
+    // the FIRST (earliest) created meeting per contact is the one we keep.
+    const seenBooked: Set<string>[] = buckets.map(() => new Set<string>());
+    const created = dsMeetings
+      .filter((m: any) => bucketOf(parseT(m.properties.hs_createdate)) >= 0)
+      .sort((a: any, b: any) =>
+        (a.properties.hs_createdate || "").localeCompare(
+          b.properties.hs_createdate || "",
+        ),
+      );
+    for (const m of created) {
+      const bi = bucketOf(parseT(m.properties.hs_createdate));
+      if (bi < 0) continue;
+      const cids = contactAssoc[m.id] || [];
+      const key = cids.length ? `c:${cids.slice().sort()[0]}` : `m:${m.id}`;
+      if (seenBooked[bi].has(key)) continue;
+      seenBooked[bi].add(key);
+      series.bookings[bi]++;
+    }
+
+    // SATS: a DS is "sat" if an associated deal is in a DS_SAT_STAGES stage.
+    // Bucket by the held date (hs_meeting_start_time), dedupe by the sat deal so
+    // a deal linked to multiple meetings counts once per bucket.
+    const seenSat: Set<string>[] = buckets.map(() => new Set<string>());
+    for (const m of dsMeetings) {
+      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
+      if (bi < 0) continue;
+      for (const did of dealAssoc[m.id] || []) {
+        const stage = dealProps[did]?.dealstage;
+        if (stage && DS_SAT_STAGES.includes(stage) && !seenSat[bi].has(did)) {
+          seenSat[bi].add(did);
+          series.sats[bi]++;
+        }
+      }
+    }
+  })();
+
+  // ---- MEMBERS: memberships sold by closedate (exclude Referral) -----------
+  const membersP = (async () => {
+    for (const stageId of Object.keys(MEMBERSHIP_SOLD_TIERS)) {
+      const deals = await hubspot.searchObjects(
+        "deals",
+        {
+          filterGroups: [
+            { filters: [{ propertyName: "dealstage", operator: "EQ", value: stageId }] },
+          ],
+          properties: ["dealstage", "closedate"],
+        },
+        3000,
+      );
+      for (const d of deals) {
+        const bi = bucketOf(parseT(d.properties.closedate));
+        if (bi >= 0) series.members[bi]++;
+      }
+    }
+  })();
+
+  // ---- EOIs + UC: milestone dates across contract/property/settlement ------
+  // Same deal pull + milestone logic as the contracts() section, but bucketed
+  // by the EOI-entered / UC-entered date. Excludes Fallover + test records.
+  const contractsP = (async () => {
+    const enteredProps = CONTRACT_FUNNEL_STEPS.flatMap((s) =>
+      s.stages.map((id) => `hs_v2_date_entered_${id}`),
+    );
+    const pipelineIds = [CONTRACT_PIPELINE, ...CONTRACT_UC_PIPELINES];
+    const filterGroups: any[] = pipelineIds.map((id) => ({
+      filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
+    }));
+    for (const psId of CONTRACT_EOI_PIPELINES) {
+      for (const eoiStage of CONTRACT_EOI_STAGES) {
+        filterGroups.push({
+          filters: [
+            { propertyName: "pipeline", operator: "EQ", value: psId },
+            { propertyName: "dealstage", operator: "EQ", value: eoiStage },
+          ],
+        });
+      }
+    }
+    const deals = await hubspot.searchDeals(
+      {
+        filterGroups,
+        properties: [
+          "dealname",
+          "dealstage",
+          "pipeline",
+          "closedate",
+          "createdate",
+          ...enteredProps,
+          `hs_v2_date_entered_${CONTRACT_UC_STAGE}`,
+        ],
+        sorts: [{ propertyName: "hs_lastmodifieddate", direction: "DESCENDING" }],
+      },
+      3000,
+    );
+    for (const d of deals) {
+      const props = d.properties as any;
+      const stage = props.dealstage || "";
+      if (CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
+      if (/\btest\b/.test(String(props.dealname || "").toLowerCase())) continue;
+      const isSettlement = CONTRACT_UC_PIPELINES.includes(props.pipeline || "");
+
+      // EOI milestone = earliest EOI-stage entered date.
+      let eoiMs = NaN;
+      for (const sid of CONTRACT_EOI_STAGES) {
+        const t = parseT(props[`hs_v2_date_entered_${sid}`]);
+        if (!isNaN(t) && (isNaN(eoiMs) || t < eoiMs)) eoiMs = t;
+      }
+      if (!isNaN(eoiMs)) {
+        const bi = bucketOf(eoiMs);
+        if (bi >= 0) series.eois[bi]++;
+      }
+
+      // UC milestone = reached Unconditional (stage) or any settlement deal.
+      const reachedUC = stage === CONTRACT_UC_STAGE || isSettlement;
+      if (reachedUC) {
+        let ucMs = parseT(props[`hs_v2_date_entered_${CONTRACT_UC_STAGE}`]);
+        if (isNaN(ucMs)) ucMs = parseT(props.closedate);
+        if (isNaN(ucMs)) ucMs = parseT(props.createdate);
+        const bi = bucketOf(ucMs);
+        if (bi >= 0) series.uc[bi]++;
+      }
+    }
+  })();
+
+  await Promise.all([leadsP, dsP, membersP, contractsP]);
+
+  const metrics = [
+    { key: "leads", label: "Leads" },
+    { key: "bookings", label: "Bookings" },
+    { key: "sats", label: "Sats" },
+    { key: "members", label: "Members" },
+    { key: "eois", label: "EOIs" },
+    { key: "uc", label: "UC" },
+  ];
+  const rows = buckets.map((b, i) => ({
+    label: b.label,
+    start: b.start,
+    end: b.end,
+    leads: series.leads[i],
+    bookings: series.bookings[i],
+    sats: series.sats[i],
+    members: series.members[i],
+    eois: series.eois[i],
+    uc: series.uc[i],
+  }));
+  const totals = metrics.reduce((acc, m) => {
+    acc[m.key] = (series[m.key] as number[]).reduce((s, n) => s + n, 0);
+    return acc;
+  }, {} as Record<string, number>);
+
+  return {
+    generatedAt: new Date().toISOString(),
+    granularity,
+    metrics,
+    rows,
+    totals,
   };
 }
 

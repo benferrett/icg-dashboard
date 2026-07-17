@@ -198,6 +198,31 @@ export interface SalesFunnel {
   window?: FunnelWindow;
 }
 
+// --- Business performance (week/month trend over the last 12 units) ---
+export type BizGranularity = "week" | "month";
+
+export interface BizPerfRow {
+  label: string;
+  start: string;
+  end: string;
+  leads: number;
+  bookings: number;
+  sats: number;
+  members: number;
+  eois: number;
+  uc: number;
+}
+
+export interface BusinessPerformance {
+  generatedAt: string;
+  cached?: boolean;
+  cacheAgeSec?: number;
+  granularity: BizGranularity;
+  metrics: { key: string; label: string }[];
+  rows: BizPerfRow[];
+  totals: Record<string, number>;
+}
+
 export interface MetaData {
   status: "ok" | "error" | "no_accounts";
   message?: string;

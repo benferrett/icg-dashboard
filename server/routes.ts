@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
-import { buildDashboard } from "./icg/metrics";
+import { buildDashboard, businessPerformance } from "./icg/metrics";
 import { parsePeriod } from "./icg/period";
 import { metaAds } from "./icg/meta";
 
@@ -70,6 +70,14 @@ async function warmCache() {
         console.error(`[warm] meta:${periodKey} failed:`, (e as any)?.message);
       }
     }
+    // Keep both business-performance granularities warm (independent of period).
+    for (const g of ["week", "month"] as const) {
+      try {
+        await warmKey(`bizperf:${g}`, () => businessPerformance(g));
+      } catch (e) {
+        console.error(`[warm] bizperf:${g} failed:`, (e as any)?.message);
+      }
+    }
   } finally {
     warming = false;
   }
@@ -112,6 +120,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to build dashboard" });
+    }
+  });
+
+  // Business performance trend (week/month over the last 12 units)
+  app.get("/api/business-performance", requireAuth, async (req, res) => {
+    try {
+      const force = req.query.refresh === "1";
+      const granularity = req.query.granularity === "month" ? "month" : "week";
+      const data = await cached(
+        `bizperf:${granularity}`,
+        () => businessPerformance(granularity),
+        force,
+      );
+      res.json(data);
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to build business performance" });
     }
   });
 

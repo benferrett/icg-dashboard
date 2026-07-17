@@ -91,3 +91,57 @@ export function parsePeriod(raw?: string | null): PeriodRange {
   const key = (raw && (PERIOD_KEYS as string[]).includes(raw) ? raw : "this_week") as PeriodKey;
   return resolvePeriod(key);
 }
+
+// ---- Trend buckets (Business Performance) ---------------------------------
+// A contiguous series of time buckets (weeks or months) covering roughly the
+// last 12 units up to now, in Australia/Melbourne local time. Each bucket is a
+// half-open [start, end) UTC-ISO window plus a short display label. The series
+// is oldest-first so charts read left→right in time order.
+
+export type Granularity = "week" | "month";
+
+export interface Bucket {
+  label: string; // e.g. "7 Jul" (week start) or "Jul 26" (month)
+  start: string; // inclusive, UTC ISO
+  end: string; // exclusive, UTC ISO
+}
+
+const MONTH_ABBR = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
+
+// Build the trailing `count` buckets ending with the CURRENT (in-progress)
+// week/month. Boundaries are Melbourne-local midnights converted to UTC.
+export function buildBuckets(granularity: Granularity, count = 12): Bucket[] {
+  const nowMs = Date.now();
+  const nowMel = new Date(nowMs + MEL_OFFSET_MS);
+  const y = nowMel.getUTCFullYear();
+  const m = nowMel.getUTCMonth();
+  const d = nowMel.getUTCDate();
+  const buckets: Bucket[] = [];
+
+  if (granularity === "month") {
+    // Current month back through (count-1) previous months.
+    for (let i = count - 1; i >= 0; i--) {
+      const startMs = melMidnightUtc(y, m - i, 1);
+      const endMs = melMidnightUtc(y, m - i + 1, 1);
+      const label = `${MONTH_ABBR[(((m - i) % 12) + 12) % 12]} ${String(
+        new Date(startMs + MEL_OFFSET_MS).getUTCFullYear(),
+      ).slice(2)}`;
+      buckets.push({ label, start: iso(startMs), end: iso(endMs) });
+    }
+  } else {
+    // Weeks start Monday (Melbourne). Find Monday of the current week.
+    const dow = nowMel.getUTCDay(); // 0=Sun..6=Sat
+    const daysSinceMon = (dow + 6) % 7;
+    for (let i = count - 1; i >= 0; i--) {
+      const startMs = melMidnightUtc(y, m, d - daysSinceMon - i * 7);
+      const endMs = melMidnightUtc(y, m, d - daysSinceMon - i * 7 + 7);
+      const ws = new Date(startMs + MEL_OFFSET_MS);
+      const label = `${ws.getUTCDate()} ${MONTH_ABBR[ws.getUTCMonth()]}`;
+      buckets.push({ label, start: iso(startMs), end: iso(endMs) });
+    }
+  }
+  return buckets;
+}

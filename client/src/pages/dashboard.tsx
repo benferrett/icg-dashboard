@@ -19,6 +19,7 @@ import {
   Users,
   Target,
   FileSignature,
+  TrendingUp,
   AlertTriangle,
   Moon,
   Sun,
@@ -30,8 +31,15 @@ import { MarketingView } from "./views/MarketingView";
 import { ConsultantsView } from "./views/ConsultantsView";
 import { StrategistsView } from "./views/StrategistsView";
 import { ContractsView } from "./views/ContractsView";
+import { BusinessPerformanceView } from "./views/BusinessPerformanceView";
 
-type TabKey = "overview" | "marketing" | "consultants" | "strategists" | "contracts";
+type TabKey =
+  | "overview"
+  | "marketing"
+  | "consultants"
+  | "strategists"
+  | "contracts"
+  | "business";
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <LayoutDashboard className="h-4 w-4" /> },
@@ -39,6 +47,7 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "consultants", label: "Consultants", icon: <Users className="h-4 w-4" /> },
   { key: "strategists", label: "Strategists", icon: <Target className="h-4 w-4" /> },
   { key: "contracts", label: "Contracts", icon: <FileSignature className="h-4 w-4" /> },
+  { key: "business", label: "Business Performance", icon: <TrendingUp className="h-4 w-4" /> },
 ];
 
 function useDarkMode() {
@@ -144,18 +153,20 @@ export default function DashboardPage({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Select value={period} onValueChange={(v) => setPeriod(v as PeriodKey)}>
-            <SelectTrigger className="w-[140px] h-9" data-testid="select-period">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {PERIOD_OPTIONS.map((p) => (
-                <SelectItem key={p.key} value={p.key} data-testid={`period-${p.key}`}>
-                  {p.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {tab !== "business" && (
+            <Select value={period} onValueChange={(v) => setPeriod(v as PeriodKey)}>
+              <SelectTrigger className="w-[140px] h-9" data-testid="select-period">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PERIOD_OPTIONS.map((p) => (
+                  <SelectItem key={p.key} value={p.key} data-testid={`period-${p.key}`}>
+                    {p.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
           <span className="hidden md:inline text-xs text-muted-foreground tabular-nums">
             {d ? `Updated ${timeAgo(d.generatedAt)}` : "Loading…"}
           </span>
@@ -207,9 +218,11 @@ export default function DashboardPage({
           <div className="flex items-center gap-2 mb-6">
             <span className="text-primary">{activeTab.icon}</span>
             <h1 className="text-lg font-semibold">{activeTab.label}</h1>
-            <span className="text-sm text-muted-foreground ml-2">
-              · {periodLabel}
-            </span>
+            {tab !== "business" && (
+              <span className="text-sm text-muted-foreground ml-2">
+                · {periodLabel}
+              </span>
+            )}
           </div>
 
           {dash.error && (dash.error as Error).message !== "UNAUTHORIZED" && (
@@ -253,6 +266,7 @@ export default function DashboardPage({
           {tab === "contracts" && (
             <ContractsView d={d} loading={loading} periodLabel={periodLabel} />
           )}
+          {tab === "business" && <BusinessPerformanceView token={token} />}
 
           <footer className="text-center text-xs text-muted-foreground pt-8 pb-4">
             Live data from HubSpot &amp; Meta · cached up to 5 min · Inner Circle Group
