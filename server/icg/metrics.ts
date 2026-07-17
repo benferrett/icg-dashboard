@@ -1683,18 +1683,23 @@ export async function businessPerformance(granularityRaw?: string) {
   };
 
   // ---- LEADS: contacts by createdate ---------------------------------------
+  // Contacts are high-volume (thousands/yr), so fetching every record and
+  // day-slicing a 12-month window blows past the gateway timeout. We only need
+  // per-bucket COUNTS, so run one cheap count-only search per bucket instead.
   const leadsP = (async () => {
-    const contacts = await hubspot.searchAllByTime(
-      "contacts",
-      winStart,
-      winEnd,
-      ["createdate"],
-      "createdate",
+    const counts = await Promise.all(
+      buckets.map((b) =>
+        hubspot.countContacts([
+          {
+            filters: [
+              { propertyName: "createdate", operator: "GTE", value: b.start },
+              { propertyName: "createdate", operator: "LT", value: b.end },
+            ],
+          },
+        ]),
+      ),
     );
-    for (const c of contacts) {
-      const bi = bucketOf(parseT(c.properties.createdate));
-      if (bi >= 0) series.leads[bi]++;
-    }
+    counts.forEach((n, i) => (series.leads[i] = n));
   })();
 
   // ---- BOOKINGS + SATS: Discovery Session meetings -------------------------
@@ -1704,20 +1709,42 @@ export async function businessPerformance(granularityRaw?: string) {
   // deal sits in a DS Sat-* stage, deduped by deal. Pull both created-in-window
   // and held-in-window DS meetings, then classify.
   const dsP = (async () => {
+    // Meetings are low-volume (well under the 10k pagination cap over a year),
+    // so a plain paged search on each time filter is far faster than the
+    // day-sliced searchAllByTime path.
+    const mtgProps = ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time"];
     const [createdMeetings, heldMeetings] = await Promise.all([
-      hubspot.searchAllByTime(
+      hubspot.searchObjects(
         "meetings",
-        winStart,
-        winEnd,
-        ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time"],
-        "hs_createdate",
+        {
+          filterGroups: [
+            {
+              filters: [
+                { propertyName: "hs_createdate", operator: "GTE", value: winStart },
+                { propertyName: "hs_createdate", operator: "LT", value: winEnd },
+              ],
+            },
+          ],
+          properties: mtgProps,
+          sorts: [{ propertyName: "hs_createdate", direction: "ASCENDING" }],
+        },
+        5000,
       ),
-      hubspot.searchAllByTime(
+      hubspot.searchObjects(
         "meetings",
-        winStart,
-        winEnd,
-        ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time"],
-        "hs_meeting_start_time",
+        {
+          filterGroups: [
+            {
+              filters: [
+                { propertyName: "hs_meeting_start_time", operator: "GTE", value: winStart },
+                { propertyName: "hs_meeting_start_time", operator: "LT", value: winEnd },
+              ],
+            },
+          ],
+          properties: mtgProps,
+          sorts: [{ propertyName: "hs_meeting_start_time", direction: "ASCENDING" }],
+        },
+        5000,
       ),
     ]);
     const isDs = (m: any) =>
