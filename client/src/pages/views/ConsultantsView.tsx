@@ -19,6 +19,8 @@ import {
   ListChecks,
   CalendarCheck,
   CalendarClock,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 
 // Consultant performance = the bookings a consultant made and what share showed
@@ -254,29 +256,67 @@ export function ConsultantsView({
                         </ul>
                       )}
                     </div>
-                    {/* Scheduled to be held this period */}
+                    {/* Scheduled to be held this period — with sat/no-show mark */}
                     <div className="flex flex-col gap-2">
                       <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                         <CalendarClock className="h-3.5 w-3.5" />
                         Scheduled ({fmtNumber(c.scheduleds.length)})
+                        <span className="ml-auto flex items-center gap-1 normal-case">
+                          <CheckCircle2 className="h-3 w-3 text-emerald-500" />
+                          sat
+                          <XCircle className="h-3 w-3 text-red-500" />
+                          no-show
+                        </span>
                       </div>
                       {c.scheduleds.length === 0 ? (
                         <span className="text-sm text-muted-foreground">—</span>
                       ) : (
-                        <ul className="flex flex-col gap-1">
-                          {c.scheduleds.map((s, i) => (
-                            <li
-                              key={`${s.client}-${i}`}
-                              className="flex items-baseline justify-between gap-2 text-sm"
-                              data-testid={`scheduled-${c.name}-${i}`}
-                            >
-                              <span className="truncate">{s.client}</span>
-                              <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                                {fmtDateShort(s.date)}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
+                        (() => {
+                          // Match each scheduled client to the sat list (by name)
+                          // so we can show a green tick (sat) or red cross (no-show).
+                          const satNames = new Map<string, number>();
+                          for (const s of c.sats)
+                            satNames.set(
+                              s.client,
+                              (satNames.get(s.client) || 0) + 1,
+                            );
+                          return (
+                            <ul className="flex flex-col gap-1">
+                              {c.scheduleds.map((s, i) => {
+                                const rem = satNames.get(s.client) || 0;
+                                const didSit = rem > 0;
+                                if (didSit) satNames.set(s.client, rem - 1);
+                                return (
+                                  <li
+                                    key={`${s.client}-${i}`}
+                                    className="flex items-center justify-between gap-2 text-sm"
+                                    data-testid={`scheduled-${c.name}-${i}`}
+                                  >
+                                    <span className="flex items-center gap-1.5 min-w-0">
+                                      {didSit ? (
+                                        <CheckCircle2
+                                          className="h-4 w-4 shrink-0 text-emerald-500"
+                                          data-testid={`sat-mark-${c.name}-${i}`}
+                                        />
+                                      ) : (
+                                        <XCircle
+                                          className="h-4 w-4 shrink-0 text-red-500"
+                                          data-testid={`noshow-mark-${c.name}-${i}`}
+                                        />
+                                      )}
+                                      <span className="truncate">
+                                        {s.client}
+                                      </span>
+                                    </span>
+                                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                                      {fmtDateShort(s.date)}
+                                    </span>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          );
+                        })()
                       )}
                     </div>
                     {/* Bookings that sat */}
