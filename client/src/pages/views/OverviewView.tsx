@@ -4,15 +4,6 @@ import { Stat } from "@/components/dashboard/Stat";
 import { Section } from "@/components/dashboard/Section";
 import { Card } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { AlertTriangle, Filter, UserCheck } from "lucide-react";
 
 export function OverviewView({
@@ -144,22 +135,6 @@ export function OverviewView({
             const noShow = Math.max(0, scheduled - sat);
             const rate =
               scheduled > 0 ? Math.round((sat / scheduled) * 100) : null;
-            // Consultants with at least one scheduled session this period.
-            const rows = d.consultants
-              .filter((c) => (c.dsScheduled || 0) > 0)
-              .sort(
-                (a, b) =>
-                  (b.showUp ?? -1) - (a.showUp ?? -1) ||
-                  b.dsScheduled - a.dsScheduled,
-              );
-            const rateVariant = (r: number | null) =>
-              r == null
-                ? "secondary"
-                : r >= 70
-                  ? "default"
-                  : r >= 50
-                    ? "secondary"
-                    : "destructive";
             return (
               <div className="flex flex-col gap-4">
                 <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -189,66 +164,6 @@ export function OverviewView({
                     accent
                   />
                 </div>
-
-                <Card className="overflow-hidden">
-                  <div className="px-4 pt-4 pb-2 text-sm font-medium">
-                    Show-up by consultant · {win.label.toLowerCase()}
-                  </div>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Consultant</TableHead>
-                        <TableHead className="text-right">Scheduled</TableHead>
-                        <TableHead className="text-right">Sat</TableHead>
-                        <TableHead className="text-right">No-shows</TableHead>
-                        <TableHead className="text-right">Show-up %</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {rows.length === 0 ? (
-                        <TableRow>
-                          <TableCell
-                            colSpan={5}
-                            className="text-center text-muted-foreground py-6"
-                          >
-                            No sessions scheduled this period.
-                          </TableCell>
-                        </TableRow>
-                      ) : (
-                        rows.map((c) => {
-                          const ns = Math.max(0, c.dsScheduled - c.dsSat);
-                          return (
-                            <TableRow
-                              key={c.name}
-                              data-testid={`row-satrate-${c.name}`}
-                            >
-                              <TableCell className="font-medium">
-                                {c.name}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {fmtNumber(c.dsScheduled)}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {fmtNumber(c.dsSat)}
-                              </TableCell>
-                              <TableCell className="text-right tabular-nums">
-                                {fmtNumber(ns)}
-                              </TableCell>
-                              <TableCell className="text-right">
-                                <Badge
-                                  variant={rateVariant(c.showUp)}
-                                  className="tabular-nums"
-                                >
-                                  {c.showUp == null ? "—" : `${c.showUp}%`}
-                                </Badge>
-                              </TableCell>
-                            </TableRow>
-                          );
-                        })
-                      )}
-                    </TableBody>
-                  </Table>
-                </Card>
               </div>
             );
           })()
@@ -329,56 +244,6 @@ export function OverviewView({
                     testId="funnel-membership-conversion"
                   />
                 </div>
-
-                <Card className="overflow-hidden">
-                  <div className="px-4 pt-4 pb-2 text-sm font-medium">
-                    Lead contact by consultant · {win.label.toLowerCase()}
-                  </div>
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>Consultant</TableHead>
-                        <TableHead className="text-right">Leads</TableHead>
-                        <TableHead className="text-right">Contacted</TableHead>
-                        <TableHead className="text-right">Contact %</TableHead>
-                        <TableHead className="text-right">Spoke &gt;30s</TableHead>
-                        <TableHead className="text-right">Connect %</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {win.consultants.map((c) => (
-                        <TableRow key={c.name} data-testid={`row-funnel-${c.name}`}>
-                          <TableCell className="font-medium">{c.name}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtNumber(c.leads)}
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtNumber(c.contacted)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Badge
-                              variant={c.contactRate >= 80 ? "default" : "secondary"}
-                              className="tabular-nums"
-                            >
-                              {c.contactRate}%
-                            </Badge>
-                          </TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            {fmtNumber(c.connected)}
-                          </TableCell>
-                          <TableCell className="text-right">
-                            <Badge
-                              variant={c.connectRate >= 50 ? "default" : "secondary"}
-                              className="tabular-nums"
-                            >
-                              {c.connectRate}%
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
-                </Card>
               </div>
             );
           })()
