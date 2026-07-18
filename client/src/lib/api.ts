@@ -187,6 +187,7 @@ export interface FunnelWindow {
   };
   dsBooked: number;
   dsStarted: number;
+  dsScheduled: number;
   dsSat: number;
   membershipsSold: number;
   membershipTiers: Record<string, number>;
