@@ -537,6 +537,14 @@ async function discoverySessions(startIso: string, endIso: string) {
   // (consultant bookings + Unattributed strategist-direct = booked).
   const bookedByConsultant: Record<string, number> = {};
   const satByConsultant: Record<string, number> = {};
+  // Per-lead-source funnel split (EMBR vs META) so the Marketing tab can show
+  // funnel performance per channel. Each is booked/scheduled/sat, counted with
+  // the SAME dedupe rules as the headline totals below.
+  const emptySrc = () => ({ booked: 0, scheduled: 0, sat: 0 });
+  const bySource: Record<"EMBR" | "META", { booked: number; scheduled: number; sat: number }> = {
+    EMBR: emptySrc(),
+    META: emptySrc(),
+  };
   // Per-consultant CLIENT-LEVEL lists (for the drill-down section on the
   // Consultants page). bookingsByConsultant = the unique DS each consultant
   // booked in the window (client name + created date). satsByConsultant = the
@@ -575,6 +583,8 @@ async function discoverySessions(startIso: string, endIso: string) {
   // BOTH the per-consultant booked attribution and the per-consultant sat
   // attribution so the two columns use an identical booker definition.
   let resolveBooker: (meetingId: string) => string = () => "Unattributed";
+  // Lead source (EMBR/META/null) of a DS meeting; populated with associations.
+  let sourceOfMeeting: (meetingId: string) => "EMBR" | "META" | null = () => null;
   if (dsMeetings.length) {
     const dsIds = dsMeetings.map((m) => m.id);
     const contactAssocPromise = hubspot.batchAssociations("meetings", "contacts", dsIds);
@@ -600,6 +610,20 @@ async function discoverySessions(startIso: string, endIso: string) {
     const meetingIsEmbrOrMeta = (meetingId: string): boolean => {
       const cids = contactAssoc[meetingId] || [];
       return cids.some((cid) => bookingSourceOf(contactSrc[cid]) !== null);
+    };
+    // Classify a DS meeting's lead source as EMBR or META (or null if neither).
+    // If a meeting has multiple contacts we prefer EMBR when both appear (EMBR is
+    // the paid fixed-rate channel and the more specific tag). Used to split the
+    // funnel by lead source for the Marketing tab.
+    sourceOfMeeting = (meetingId: string): "EMBR" | "META" | null => {
+      const cids = contactAssoc[meetingId] || [];
+      let meta: "META" | null = null;
+      for (const cid of cids) {
+        const s = bookingSourceOf(contactSrc[cid]);
+        if (s === "EMBR") return "EMBR";
+        if (s === "META") meta = "META";
+      }
+      return meta;
     };
     // Resolve the genuine booking consultant for a DS meeting:
     //   1) the associated deal's booking_consultant, if a real consultant; else
@@ -662,6 +686,8 @@ async function discoverySessions(startIso: string, endIso: string) {
     booked = bookedMeetings.length;
     for (const m of bookedMeetings) {
       const name = resolveBooker(m.id);
+      const src = sourceOfMeeting(m.id);
+      if (src) bySource[src].booked += 1;
       bookedByConsultant[name] = (bookedByConsultant[name] || 0) + 1;
       (bookingsByConsultant[name] ||= []).push({
         client: clientFromTitle(m.properties.hs_meeting_title || ""),
@@ -702,6 +728,8 @@ async function discoverySessions(startIso: string, endIso: string) {
     const k = schedKey(m);
     if (scheduledKeys.has(k)) continue; // same person, 2 sessions this week
     scheduledKeys.add(k);
+    const src = sourceOfMeeting(m.id);
+    if (src) bySource[src].scheduled += 1;
     const name = resolveBooker(m.id);
     scheduledByConsultant[name] = (scheduledByConsultant[name] || 0) + 1;
     (scheduledsByConsultant[name] ||= []).push({
@@ -748,6 +776,8 @@ async function discoverySessions(startIso: string, endIso: string) {
       if (!satStages.has(dealProps[did]?.dealstage)) continue;
       if (satDealIds.has(did)) continue; // dedupe by deal (unique people)
       satDealIds.add(did);
+      const src = sourceOfMeeting(m.id);
+      if (src) bySource[src].sat += 1;
       const name = resolveBooker(m.id);
       satByConsultant[name] = (satByConsultant[name] || 0) + 1;
       (satsByConsultant[name] ||= []).push({
@@ -773,6 +803,7 @@ async function discoverySessions(startIso: string, endIso: string) {
     started: started.length,
     scheduled,
     sat,
+    bySource,
     bookedByConsultant,
     satByConsultant,
     scheduledByConsultant,
@@ -989,6 +1020,7 @@ interface FunnelWindow {
   dsStarted: number;
   dsScheduled: number;
   dsSat: number;
+  dsBySource: Record<"EMBR" | "META", { booked: number; scheduled: number; sat: number }>;
   membershipsSold: number;
   membershipTiers: Record<string, number>;
 }
@@ -1015,6 +1047,7 @@ async function salesFunnel(range: PeriodRange) {
       dsStarted: ds.started,
       dsScheduled: ds.scheduled,
       dsSat: ds.sat,
+      dsBySource: ds.bySource,
       membershipsSold: sold.total,
       membershipTiers: sold.tiers,
     };

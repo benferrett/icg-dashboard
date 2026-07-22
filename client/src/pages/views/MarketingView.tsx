@@ -1,4 +1,5 @@
-import { Dashboard, MetaData } from "@/lib/api";
+import { useState } from "react";
+import { Dashboard, MetaData, FunnelWindow } from "@/lib/api";
 import {
   fmtCurrency,
   fmtNumber,
@@ -26,7 +27,9 @@ import {
   Tooltip,
   CartesianGrid,
 } from "recharts";
-import { Megaphone, Facebook, Layers, Target, DollarSign, AlertTriangle } from "lucide-react";
+import { Megaphone, Facebook, Layers, Target, DollarSign, AlertTriangle, Filter } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
 import { CHART_COLORS, ChartTooltip } from "./shared";
 
 export function MarketingView({
@@ -42,8 +45,137 @@ export function MarketingView({
   loading: boolean;
   periodLabel: string;
 }) {
+  // Lead-source filter for the DS funnel section: Both channels, EMBR only, or
+  // META only. Lets Ben compare show-up / sit performance per lead source.
+  const [src, setSrc] = useState<"ALL" | "EMBR" | "META">("ALL");
+  const win: FunnelWindow | undefined = d?.salesFunnel?.ok
+    ? d.salesFunnel.window
+    : undefined;
+  const funnelOk = d?.salesFunnel?.ok !== false;
+  // Pick booked/scheduled/sat for the selected source (or the combined total).
+  const bs = win?.dsBySource;
+  const booked =
+    win == null
+      ? 0
+      : src === "ALL"
+        ? win.dsBooked
+        : (bs?.[src]?.booked ?? 0);
+  const scheduled =
+    win == null
+      ? 0
+      : src === "ALL"
+        ? win.dsScheduled
+        : (bs?.[src]?.scheduled ?? 0);
+  const sat =
+    win == null ? 0 : src === "ALL" ? win.dsSat : (bs?.[src]?.sat ?? 0);
+  const showRate = scheduled > 0 ? Math.round((sat / scheduled) * 100) : null;
+  const sitRate = booked > 0 ? Math.round((sat / booked) * 100) : null;
+  const noShow = Math.max(0, scheduled - sat);
+  const srcLabel =
+    src === "ALL" ? "all channels" : src === "EMBR" ? "EMBR" : "META";
+  const srcTabs: { key: "ALL" | "EMBR" | "META"; label: string }[] = [
+    { key: "ALL", label: "Both" },
+    { key: "EMBR", label: "EMBR" },
+    { key: "META", label: "META" },
+  ];
   return (
     <div className="flex flex-col gap-8">
+      {/* DS FUNNEL BY LEAD SOURCE (sit rate / show rate, EMBR vs META) */}
+      <Section
+        title="DS funnel by lead source"
+        icon={<Filter className="h-4 w-4 text-primary" />}
+      >
+        {loading || !d ? (
+          <Skeleton className="h-40 w-full" />
+        ) : !funnelOk ? (
+          <Card className="p-4 border-amber-500/40 flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <div className="font-medium">Funnel data unavailable</div>
+              <div className="text-muted-foreground">
+                {d.salesFunnel?.ok === false
+                  ? d.salesFunnel.error
+                  : "Could not load funnel data."}
+              </div>
+            </div>
+          </Card>
+        ) : (
+          <div className="flex flex-col gap-4">
+            {/* Source toggle */}
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                Lead source
+              </span>
+              <div className="inline-flex rounded-md border border-border p-0.5 gap-0.5">
+                {srcTabs.map((t) => (
+                  <Button
+                    key={t.key}
+                    size="sm"
+                    variant={src === t.key ? "default" : "ghost"}
+                    className={cn(
+                      "h-7 px-3 text-xs",
+                      src !== t.key && "text-muted-foreground",
+                    )}
+                    onClick={() => setSrc(t.key)}
+                    data-testid={`src-toggle-${t.key}`}
+                  >
+                    {t.label}
+                  </Button>
+                ))}
+              </div>
+              <span className="text-xs text-muted-foreground ml-auto">
+                {periodLabel} · {srcLabel}
+              </span>
+            </div>
+
+            {/* Funnel counts */}
+            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+              <Stat
+                label="DS booked"
+                value={fmtNumber(booked)}
+                sub="created this period"
+                testId="src-booked"
+              />
+              <Stat
+                label="DS scheduled"
+                value={fmtNumber(scheduled)}
+                sub="due to be held"
+                testId="src-scheduled"
+              />
+              <Stat
+                label="DS sat"
+                value={fmtNumber(sat)}
+                sub={`${fmtNumber(noShow)} no-show`}
+                testId="src-sat"
+              />
+            </div>
+
+            {/* Rates */}
+            <div className="grid grid-cols-2 gap-3">
+              <Stat
+                label="Sit rate"
+                value={sitRate == null ? "—" : `${sitRate}%`}
+                sub={`${fmtNumber(sat)} sat ÷ ${fmtNumber(booked)} booked`}
+                testId="src-sitrate"
+                accent
+              />
+              <Stat
+                label="Show rate"
+                value={showRate == null ? "—" : `${showRate}%`}
+                sub={`${fmtNumber(sat)} sat ÷ ${fmtNumber(scheduled)} scheduled`}
+                testId="src-showrate"
+                accent
+              />
+            </div>
+
+            <p className="text-xs text-muted-foreground">
+              Sit rate = of DS booked this period, the share that sat. Show rate
+              = of DS scheduled to be held this period, the share that showed up.
+            </p>
+          </div>
+        )}
+      </Section>
+
       {/* LEADS */}
       <Section title="Lead generation" icon={<Megaphone className="h-4 w-4 text-primary" />}>
         <div className="grid lg:grid-cols-3 gap-4">
