@@ -68,8 +68,16 @@ export function MarketingView({
         : (bs?.[src]?.scheduled ?? 0);
   const sat =
     win == null ? 0 : src === "ALL" ? win.dsSat : (bs?.[src]?.sat ?? 0);
+  // Cohort sit numerator: of the DS BOOKED this period, how many eventually sat.
+  // Using this (not held-in-window sat) keeps sit rate <= 100%.
+  const bookedSat =
+    win == null
+      ? 0
+      : src === "ALL"
+        ? win.dsBookedSat
+        : (bs?.[src]?.bookedSat ?? 0);
   const showRate = scheduled > 0 ? Math.round((sat / scheduled) * 100) : null;
-  const sitRate = booked > 0 ? Math.round((sat / booked) * 100) : null;
+  const sitRate = booked > 0 ? Math.round((bookedSat / booked) * 100) : null;
   const noShow = Math.max(0, scheduled - sat);
   const srcLabel =
     src === "ALL" ? "all channels" : src === "EMBR" ? "EMBR" : "META";
@@ -155,7 +163,7 @@ export function MarketingView({
               <Stat
                 label="Sit rate"
                 value={sitRate == null ? "—" : `${sitRate}%`}
-                sub={`${fmtNumber(sat)} sat ÷ ${fmtNumber(booked)} booked`}
+                sub={`${fmtNumber(bookedSat)} sat ÷ ${fmtNumber(booked)} booked`}
                 testId="src-sitrate"
                 accent
               />
@@ -169,8 +177,11 @@ export function MarketingView({
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Sit rate = of DS booked this period, the share that sat. Show rate
-              = of DS scheduled to be held this period, the share that showed up.
+              Sit rate = of the DS booked this period, the share that eventually
+              sat (cohort, tracked forward). Show rate = of the DS scheduled to be
+              held this period, the share that showed up. Recent bookings may
+              still be pending, so sit rate for the current period settles as
+              those sessions are held.
             </p>
           </div>
         )}

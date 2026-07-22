@@ -540,11 +540,20 @@ async function discoverySessions(startIso: string, endIso: string) {
   // Per-lead-source funnel split (EMBR vs META) so the Marketing tab can show
   // funnel performance per channel. Each is booked/scheduled/sat, counted with
   // the SAME dedupe rules as the headline totals below.
-  const emptySrc = () => ({ booked: 0, scheduled: 0, sat: 0 });
-  const bySource: Record<"EMBR" | "META", { booked: number; scheduled: number; sat: number }> = {
+  // bookedSat = cohort measure: of the DS BOOKED in this period, how many of
+  // those same prospects eventually sat (any associated deal now in a sat stage),
+  // regardless of when the session was held. This is the correct sit-rate
+  // numerator (sat cohort / booked cohort <= 100%), distinct from `sat` which is
+  // held-in-window. bookedSatCohort is the overall (both-channel) equivalent.
+  const emptySrc = () => ({ booked: 0, scheduled: 0, sat: 0, bookedSat: 0 });
+  const bySource: Record<
+    "EMBR" | "META",
+    { booked: number; scheduled: number; sat: number; bookedSat: number }
+  > = {
     EMBR: emptySrc(),
     META: emptySrc(),
   };
+  let bookedSatCohort = 0;
   // Per-consultant CLIENT-LEVEL lists (for the drill-down section on the
   // Consultants page). bookingsByConsultant = the unique DS each consultant
   // booked in the window (client name + created date). satsByConsultant = the
@@ -684,10 +693,20 @@ async function discoverySessions(startIso: string, endIso: string) {
       });
     // Replace the provisional raw count with the unique-session count.
     booked = bookedMeetings.length;
+    const cohortSatStages = new Set(DS_SAT_STAGES);
     for (const m of bookedMeetings) {
       const name = resolveBooker(m.id);
       const src = sourceOfMeeting(m.id);
       if (src) bySource[src].booked += 1;
+      // Did this booked prospect eventually sit? True if ANY associated deal is
+      // currently in a sat stage (stage advances once they sit / progress).
+      const cohortSat = (dealAssoc[m.id] || []).some((did) =>
+        cohortSatStages.has(dealProps[did]?.dealstage),
+      );
+      if (cohortSat) {
+        bookedSatCohort += 1;
+        if (src) bySource[src].bookedSat += 1;
+      }
       bookedByConsultant[name] = (bookedByConsultant[name] || 0) + 1;
       (bookingsByConsultant[name] ||= []).push({
         client: clientFromTitle(m.properties.hs_meeting_title || ""),
@@ -803,6 +822,7 @@ async function discoverySessions(startIso: string, endIso: string) {
     started: started.length,
     scheduled,
     sat,
+    bookedSat: bookedSatCohort,
     bySource,
     bookedByConsultant,
     satByConsultant,
@@ -1020,7 +1040,11 @@ interface FunnelWindow {
   dsStarted: number;
   dsScheduled: number;
   dsSat: number;
-  dsBySource: Record<"EMBR" | "META", { booked: number; scheduled: number; sat: number }>;
+  dsBookedSat: number;
+  dsBySource: Record<
+    "EMBR" | "META",
+    { booked: number; scheduled: number; sat: number; bookedSat: number }
+  >;
   membershipsSold: number;
   membershipTiers: Record<string, number>;
 }
@@ -1047,6 +1071,7 @@ async function salesFunnel(range: PeriodRange) {
       dsStarted: ds.started,
       dsScheduled: ds.scheduled,
       dsSat: ds.sat,
+      dsBookedSat: ds.bookedSat,
       dsBySource: ds.bySource,
       membershipsSold: sold.total,
       membershipTiers: sold.tiers,
