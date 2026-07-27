@@ -68,16 +68,7 @@ export function MarketingView({
         : (bs?.[src]?.scheduled ?? 0);
   const sat =
     win == null ? 0 : src === "ALL" ? win.dsSat : (bs?.[src]?.sat ?? 0);
-  // Cohort sit numerator: of the DS BOOKED this period, how many eventually sat.
-  // Using this (not held-in-window sat) keeps sit rate <= 100%.
-  const bookedSat =
-    win == null
-      ? 0
-      : src === "ALL"
-        ? win.dsBookedSat
-        : (bs?.[src]?.bookedSat ?? 0);
   const showRate = scheduled > 0 ? Math.round((sat / scheduled) * 100) : null;
-  const sitRate = booked > 0 ? Math.round((bookedSat / booked) * 100) : null;
   const noShow = Math.max(0, scheduled - sat);
   const srcLabel =
     src === "ALL" ? "all channels" : src === "EMBR" ? "EMBR" : "META";
@@ -88,7 +79,7 @@ export function MarketingView({
   ];
   return (
     <div className="flex flex-col gap-8">
-      {/* DS FUNNEL BY LEAD SOURCE (sit rate / show rate, EMBR vs META) */}
+      {/* DS FUNNEL BY LEAD SOURCE (show rate, EMBR vs META) */}
       <Section
         title="DS funnel by lead source"
         icon={<Filter className="h-4 w-4 text-primary" />}
@@ -158,15 +149,8 @@ export function MarketingView({
               />
             </div>
 
-            {/* Rates */}
-            <div className="grid grid-cols-2 gap-3">
-              <Stat
-                label="Sit rate"
-                value={sitRate == null ? "—" : `${sitRate}%`}
-                sub={`${fmtNumber(bookedSat)} sat ÷ ${fmtNumber(booked)} booked`}
-                testId="src-sitrate"
-                accent
-              />
+            {/* Rate */}
+            <div className="grid grid-cols-1 gap-3">
               <Stat
                 label="Show rate"
                 value={showRate == null ? "—" : `${showRate}%`}
@@ -177,11 +161,8 @@ export function MarketingView({
             </div>
 
             <p className="text-xs text-muted-foreground">
-              Sit rate = of the DS booked this period, the share that eventually
-              sat (cohort, tracked forward). Show rate = of the DS scheduled to be
-              held this period, the share that showed up. Recent bookings may
-              still be pending, so sit rate for the current period settles as
-              those sessions are held.
+              Show rate = of the DS scheduled to be held this period, the share
+              that showed up.
             </p>
           </div>
         )}
