@@ -990,21 +990,33 @@ async function membershipsSold(
   // contacts; if ANY associated contact is EMBR-tagged we count the sale as
   // EMBR, else Meta. Used as the CAC denominator per channel.
   const byChannel = { meta: 0, embr: 0 };
+  // soldBySource uses the SAME bookingSourceOf rule as the DS funnel (EMBR, or
+  // META only when hs_analytics_source == PAID_SOCIAL). This is the correct
+  // numerator for "conversion to membership per lead source" on the Marketing
+  // tab, so it ties to the per-source booked cohort. Deals whose contact is not
+  // EMBR/META (direct, organic, referral, etc.) are excluded here — that is why
+  // soldBySource.EMBR + soldBySource.META can be < total.
+  const soldBySource = { EMBR: 0, META: 0 };
   try {
     const soldIds = soldDeals.map((s) => s.id);
     if (soldIds.length) {
       const contactAssoc = await hubspot.batchAssociations("deals", "contacts", soldIds);
       const allContactIds = Array.from(new Set(Object.values(contactAssoc).flat()));
       const contactProps = allContactIds.length
-        ? await hubspot.batchRead("contacts", allContactIds, ["lead_source"])
+        ? await hubspot.batchRead("contacts", allContactIds, BOOKING_SOURCE_PROPS)
         : {};
       for (const sd of soldDeals) {
         const cids = contactAssoc[sd.id] || [];
+        // CAC channel split: legacy rule (any EMBR-tagged contact = EMBR, else Meta).
         const isEmbr = cids.some(
           (cid) => contactProps[cid]?.lead_source === "EMBR",
         );
         if (isEmbr) byChannel.embr++;
         else byChannel.meta++;
+        // Funnel-consistent source: EMBR wins over META if both present.
+        const srcs = cids.map((cid) => bookingSourceOf(contactProps[cid]));
+        if (srcs.includes("EMBR")) soldBySource.EMBR++;
+        else if (srcs.includes("META")) soldBySource.META++;
       }
     }
   } catch {
@@ -1021,6 +1033,7 @@ async function membershipsSold(
     onSessionTotal,
     followUpTotal,
     byChannel,
+    soldBySource,
   };
 }
 
@@ -1043,7 +1056,13 @@ interface FunnelWindow {
   dsBookedSat: number;
   dsBySource: Record<
     "EMBR" | "META",
-    { booked: number; scheduled: number; sat: number; bookedSat: number }
+    {
+      booked: number;
+      scheduled: number;
+      sat: number;
+      bookedSat: number;
+      sold: number;
+    }
   >;
   membershipsSold: number;
   membershipTiers: Record<string, number>;
@@ -1072,7 +1091,10 @@ async function salesFunnel(range: PeriodRange) {
       dsScheduled: ds.scheduled,
       dsSat: ds.sat,
       dsBookedSat: ds.bookedSat,
-      dsBySource: ds.bySource,
+      dsBySource: {
+        EMBR: { ...ds.bySource.EMBR, sold: sold.soldBySource.EMBR },
+        META: { ...ds.bySource.META, sold: sold.soldBySource.META },
+      },
       membershipsSold: sold.total,
       membershipTiers: sold.tiers,
     };

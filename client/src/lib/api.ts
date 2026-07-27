@@ -194,7 +194,13 @@ export interface FunnelWindow {
   dsBookedSat: number;
   dsBySource: Record<
     "EMBR" | "META",
-    { booked: number; scheduled: number; sat: number; bookedSat: number }
+    {
+      booked: number;
+      scheduled: number;
+      sat: number;
+      bookedSat: number;
+      sold: number;
+    }
   >;
   membershipsSold: number;
   membershipTiers: Record<string, number>;

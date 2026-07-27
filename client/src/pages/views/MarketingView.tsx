@@ -68,7 +68,17 @@ export function MarketingView({
         : (bs?.[src]?.scheduled ?? 0);
   const sat =
     win == null ? 0 : src === "ALL" ? win.dsSat : (bs?.[src]?.sat ?? 0);
+  const sold =
+    win == null
+      ? 0
+      : src === "ALL"
+        ? win.membershipsSold
+        : (bs?.[src]?.sold ?? 0);
   const showRate = scheduled > 0 ? Math.round((sat / scheduled) * 100) : null;
+  // Conversion to membership = memberships sold ÷ DS sat, per lead source
+  // (same definition as the Strategists tab). For a single source the sold
+  // count is attributed via the associated contact's lead source.
+  const convRate = sat > 0 ? Math.round((sold / sat) * 100) : null;
   const noShow = Math.max(0, scheduled - sat);
   const srcLabel =
     src === "ALL" ? "all channels" : src === "EMBR" ? "EMBR" : "META";
@@ -149,8 +159,8 @@ export function MarketingView({
               />
             </div>
 
-            {/* Rate */}
-            <div className="grid grid-cols-1 gap-3">
+            {/* Rates */}
+            <div className="grid grid-cols-2 gap-3">
               <Stat
                 label="Show rate"
                 value={showRate == null ? "—" : `${showRate}%`}
@@ -158,11 +168,19 @@ export function MarketingView({
                 testId="src-showrate"
                 accent
               />
+              <Stat
+                label="Conversion to membership"
+                value={convRate == null ? "—" : `${convRate}%`}
+                sub={`${fmtNumber(sold)} sold ÷ ${fmtNumber(sat)} sat`}
+                testId="src-conv"
+                accent
+              />
             </div>
 
             <p className="text-xs text-muted-foreground">
               Show rate = of the DS scheduled to be held this period, the share
-              that showed up.
+              that showed up. Conversion to membership = memberships sold ÷ DS
+              sat for the selected lead source.
             </p>
           </div>
         )}
