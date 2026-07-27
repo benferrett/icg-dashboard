@@ -116,7 +116,9 @@ export function StrategistsView({
                       </TableCell>
                     </TableRow>
                   ))
-                : d.strategists.map((s) => (
+                : [...d.strategists]
+                    .sort((a, b) => b.sold - a.sold)
+                    .map((s) => (
                     <TableRow
                       key={s.name}
                       data-testid={`row-strategist-${s.name}`}
