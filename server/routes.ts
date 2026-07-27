@@ -41,7 +41,13 @@ async function cached(key: string, fn: () => Promise<any>, force = false) {
 // --- Background cache warmer ----------------------------------------------
 // Periods most people look at. We keep these warm at all times so the common
 // case is instant. Other periods (e.g. this_year) still cache on first request.
-const WARM_PERIODS = ["this_week", "last_week", "this_month", "last_month"];
+const WARM_PERIODS = [
+  "this_week",
+  "last_week",
+  "this_month",
+  "last_month",
+  "last_3_months",
+];
 const WARM_INTERVAL_MS = 4 * 60 * 1000; // refresh a bit before the 5-min TTL
 let warming = false;
 

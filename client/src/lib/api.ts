@@ -36,6 +36,7 @@ export type PeriodKey =
   | "last_week"
   | "this_month"
   | "last_month"
+  | "last_3_months"
   | "this_year";
 
 export const PERIOD_OPTIONS: { key: PeriodKey; label: string }[] = [
@@ -43,6 +44,7 @@ export const PERIOD_OPTIONS: { key: PeriodKey; label: string }[] = [
   { key: "last_week", label: "Last Week" },
   { key: "this_month", label: "This Month" },
   { key: "last_month", label: "Last Month" },
+  { key: "last_3_months", label: "Last 3 Months" },
   { key: "this_year", label: "This Year" },
 ];
 

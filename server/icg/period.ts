@@ -7,6 +7,7 @@ export type PeriodKey =
   | "last_week"
   | "this_month"
   | "last_month"
+  | "last_3_months"
   | "this_year";
 
 export const PERIOD_KEYS: PeriodKey[] = [
@@ -14,6 +15,7 @@ export const PERIOD_KEYS: PeriodKey[] = [
   "last_week",
   "this_month",
   "last_month",
+  "last_3_months",
   "this_year",
 ];
 
@@ -22,6 +24,7 @@ export const PERIOD_LABELS: Record<PeriodKey, string> = {
   last_week: "Last Week",
   this_month: "This Month",
   last_month: "Last Month",
+  last_3_months: "Last 3 Months",
   this_year: "This Year",
 };
 
@@ -75,6 +78,13 @@ export function resolvePeriod(key: PeriodKey): PeriodRange {
       // First day of previous month -> first day of this month.
       startMs = melMidnightUtc(y, m - 1, 1);
       endMs = melMidnightUtc(y, m, 1);
+      break;
+    }
+    case "last_3_months": {
+      // Rolling 3 calendar months: first day of the month 2 months ago
+      // through now (current month included, in progress).
+      startMs = melMidnightUtc(y, m - 2, 1);
+      endMs = nowMs;
       break;
     }
     case "this_year": {
