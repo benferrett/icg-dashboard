@@ -1253,7 +1253,12 @@ async function strategistTeam(
   ]) {
     if (!byStrategist[name]) byStrategist[name] = { assigned: 0 };
   }
+  // Only genuine strategists belong on this tab. Booking consultants (e.g.
+  // Akhil) can leak in via the DS booked/sat attribution maps, so restrict to
+  // names that map to a real strategist owner id.
+  const strategistNames = new Set(Object.values(STRATEGIST_OWNERS));
   return Object.entries(byStrategist)
+    .filter(([name]) => strategistNames.has(name))
     .map(([name, v]) => {
       const sold = soldByStrategist[name] || 0;
       const dsBooked = bookedByStrategist[name] || 0;
