@@ -35,13 +35,15 @@ export function StrategistsView({
     d?.strategists.reduce((s, x) => s + x.soldOnSession, 0) ?? 0;
   const totalFollowUp =
     d?.strategists.reduce((s, x) => s + x.soldFollowUp, 0) ?? 0;
+  const totalEoi = d?.strategists.reduce((s, x) => s + x.eoi, 0) ?? 0;
+  const totalUc = d?.strategists.reduce((s, x) => s + x.uc, 0) ?? 0;
 
   return (
     <div className="flex flex-col gap-8">
       {/* KPI strip */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         {loading || !d ? (
-          Array.from({ length: 4 }).map((_, i) => (
+          Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-lg" />
           ))
         ) : (
@@ -59,17 +61,29 @@ export function StrategistsView({
               accent
             />
             <Stat
-              label="Conversion to membership"
+              label="Close rate"
               value={`${satConv}%`}
               sub="sold ÷ DS sat"
               testId="strategist-conv"
+            />
+            <Stat
+              label={`EOI · ${periodLabel.toLowerCase()}`}
+              value={fmtNumber(totalEoi)}
+              sub="expressions of interest"
+              testId="strategist-total-eoi"
+            />
+            <Stat
+              label={`UC · ${periodLabel.toLowerCase()}`}
+              value={fmtNumber(totalUc)}
+              sub="unconditional"
+              testId="strategist-total-uc"
+              accent
             />
             <Stat
               label={`Sold on session · ${periodLabel.toLowerCase()}`}
               value={fmtNumber(totalOnSession)}
               sub={`${fmtNumber(totalFollowUp)} via follow-up`}
               testId="strategist-on-session"
-              accent
             />
           </>
         )}
@@ -81,21 +95,24 @@ export function StrategistsView({
         icon={<Target className="h-4 w-4 text-primary" />}
       >
         <Card className="overflow-hidden">
+          <div className="overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
                 <TableHead>Strategist</TableHead>
                 <TableHead className="text-right">DS booked</TableHead>
                 <TableHead className="text-right">DS sat</TableHead>
-                <TableHead className="text-right">Membership sold</TableHead>
-                <TableHead className="text-right">Conversion</TableHead>
+                <TableHead className="text-right">Memberships sold</TableHead>
+                <TableHead className="text-right">Close rate</TableHead>
+                <TableHead className="text-right">EOI</TableHead>
+                <TableHead className="text-right">UC</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {loading || !d
                 ? Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={5}>
+                      <TableCell colSpan={7}>
                         <Skeleton className="h-5 w-full" />
                       </TableCell>
                     </TableRow>
@@ -129,10 +146,48 @@ export function StrategistsView({
                           </Badge>
                         )}
                       </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {s.eoi ? (
+                          fmtNumber(s.eoi)
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {s.uc ? (
+                          fmtNumber(s.uc)
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
+              {!loading && d && d.strategists.length > 0 && (
+                <TableRow className="border-t-2 font-medium">
+                  <TableCell>Team total</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNumber(totalBooked)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNumber(totalSat)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNumber(totalSold)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {satConv}%
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNumber(totalEoi)}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {fmtNumber(totalUc)}
+                  </TableCell>
+                </TableRow>
+              )}
             </TableBody>
           </Table>
+          </div>
         </Card>
       </Section>
 

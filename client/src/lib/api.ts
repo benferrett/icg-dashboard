@@ -103,6 +103,8 @@ export interface Dashboard {
     conversion: number;
     dsBooked: number;
     dsSat: number;
+    eoi: number;
+    uc: number;
     satConversion: number | null;
     soldOnSession: number;
     soldFollowUp: number;

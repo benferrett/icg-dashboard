@@ -1210,6 +1210,12 @@ async function strategistTeam(
     string,
     { name: string; tier: string; closedate: string; onSession: boolean; url: string }[]
   > = {},
+  // Per-strategist EOI / UC milestone counts for the selected period, sourced
+  // from contracts().byStrategist (which attributes each contract to a
+  // strategist via the deal `strategist` field / client-contact owner). Keyed
+  // by strategist name -> milestone count.
+  eoiByStrategist: Record<string, number> = {},
+  ucByStrategist: Record<string, number> = {},
 ) {
   const deals = await hubspot.searchDeals(
     {
@@ -1235,13 +1241,15 @@ async function strategistTeam(
     if (!byStrategist[key]) byStrategist[key] = { assigned: 0 };
     byStrategist[key].assigned++;
   }
-  // Make sure strategists who sold, ran DS, or had a split in the period appear
-  // even if they had no new deals assigned in the same period.
+  // Make sure strategists who sold, ran DS, had a split, or landed an EOI/UC in
+  // the period appear even if they had no new deals assigned in the same period.
   for (const name of [
     ...Object.keys(soldByStrategist),
     ...Object.keys(bookedByStrategist),
     ...Object.keys(satByStrategist),
     ...Object.keys(splitByStrategist),
+    ...Object.keys(eoiByStrategist),
+    ...Object.keys(ucByStrategist),
   ]) {
     if (!byStrategist[name]) byStrategist[name] = { assigned: 0 };
   }
@@ -1250,6 +1258,8 @@ async function strategistTeam(
       const sold = soldByStrategist[name] || 0;
       const dsBooked = bookedByStrategist[name] || 0;
       const dsSat = satByStrategist[name] || 0;
+      const eoi = eoiByStrategist[name] || 0;
+      const uc = ucByStrategist[name] || 0;
       const split = splitByStrategist[name] || { onSession: 0, followUp: 0 };
       return {
         name,
@@ -1258,6 +1268,8 @@ async function strategistTeam(
         conversion: v.assigned ? Math.round((sold / v.assigned) * 100) : 0,
         dsBooked,
         dsSat,
+        eoi,
+        uc,
         // Conversion of memberships sold to DS sat (the strategist-side close rate).
         satConversion: dsSat ? Math.round((sold / dsSat) * 100) : null,
         soldOnSession: split.onSession,
@@ -2094,6 +2106,15 @@ export async function buildDashboard(periodKey?: string) {
   // salesFunnel (DS attribution, lead counts, memberships-sold breakdown), so
   // they run after the funnel resolves — ensuring every team column ties out to
   // the headline cards.
+  // Per-strategist EOI / UC milestone counts (this period), derived from the
+  // contracts() by-strategist matrix so the Strategists tab ties out exactly to
+  // the Contracts tab's EOI / UC figures.
+  const eoiByStrategist: Record<string, number> = {};
+  const ucByStrategist: Record<string, number> = {};
+  for (const row of contractData.byStrategist || []) {
+    if (row.eoi) eoiByStrategist[row.name] = row.eoi;
+    if (row.uc) ucByStrategist[row.name] = row.uc;
+  }
   const [consultants, strategists] = await Promise.all([
     consultantTeam(
       range,
@@ -2113,6 +2134,8 @@ export async function buildDashboard(periodKey?: string) {
       satByStrategist,
       membershipSplitByStrategist,
       membershipDealsByStrategist,
+      eoiByStrategist,
+      ucByStrategist,
     ),
   ]);
 
