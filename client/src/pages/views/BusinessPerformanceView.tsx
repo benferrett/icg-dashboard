@@ -37,6 +37,7 @@ import { ChartTooltip } from "./shared";
 const METRIC_META: { key: keyof BizPerfRow; label: string; color: string }[] = [
   { key: "leads", label: "Leads", color: "hsl(217 91% 60%)" },
   { key: "bookings", label: "Bookings", color: "hsl(38 92% 50%)" },
+  { key: "scheduled", label: "Scheduled DS", color: "hsl(48 96% 53%)" },
   { key: "sats", label: "Sats", color: "hsl(160 84% 39%)" },
   { key: "members", label: "Members", color: "hsl(280 65% 60%)" },
   { key: "eois", label: "EOIs", color: "hsl(0 72% 55%)" },
@@ -98,7 +99,7 @@ export function BusinessPerformanceView({ token }: { token: string }) {
             title={`Last 12 ${unit}s · totals`}
             icon={<TrendingUp className="h-4 w-4 text-primary" />}
           >
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
               {METRIC_META.map((m) => (
                 <Stat
                   key={m.key}

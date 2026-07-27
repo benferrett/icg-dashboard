@@ -213,6 +213,7 @@ export interface BizPerfRow {
   end: string;
   leads: number;
   bookings: number;
+  scheduled: number;
   sats: number;
   members: number;
   eois: number;

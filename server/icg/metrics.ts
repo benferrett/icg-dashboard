@@ -1747,6 +1747,7 @@ export async function businessPerformance(granularityRaw?: string) {
   const series: Record<string, number[]> = {
     leads: zeros(),
     bookings: zeros(),
+    scheduled: zeros(),
     sats: zeros(),
     members: zeros(),
     eois: zeros(),
@@ -1873,6 +1874,22 @@ export async function businessPerformance(granularityRaw?: string) {
       series.bookings[bi]++;
     }
 
+    // SCHEDULED: unique DS scheduled to be HELD in a bucket (bucket by the held
+    // date hs_meeting_start_time), deduped by associated deal. This is the
+    // show-rate denominator and counts every DS due to be held, whether or not
+    // it was ultimately sat. Restricted to EMBR/META like bookings.
+    const seenSched: Set<string>[] = buckets.map(() => new Set<string>());
+    for (const m of dsMeetings) {
+      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
+      if (bi < 0) continue;
+      if (!meetingIsEmbrOrMeta(m.id)) continue;
+      const dids = dealAssoc[m.id] || [];
+      const key = dids.length ? `d:${dids.slice().sort()[0]}` : `m:${m.id}`;
+      if (seenSched[bi].has(key)) continue;
+      seenSched[bi].add(key);
+      series.scheduled[bi]++;
+    }
+
     // SATS: a DS is "sat" if an associated deal is in a DS_SAT_STAGES stage.
     // Bucket by the held date (hs_meeting_start_time), dedupe by the sat deal so
     // a deal linked to multiple meetings counts once per bucket.
@@ -1982,6 +1999,7 @@ export async function businessPerformance(granularityRaw?: string) {
   const metrics = [
     { key: "leads", label: "Leads" },
     { key: "bookings", label: "Bookings" },
+    { key: "scheduled", label: "Scheduled DS" },
     { key: "sats", label: "Sats" },
     { key: "members", label: "Members" },
     { key: "eois", label: "EOIs" },
@@ -1993,6 +2011,7 @@ export async function businessPerformance(granularityRaw?: string) {
     end: b.end,
     leads: series.leads[i],
     bookings: series.bookings[i],
+    scheduled: series.scheduled[i],
     sats: series.sats[i],
     members: series.members[i],
     eois: series.eois[i],
