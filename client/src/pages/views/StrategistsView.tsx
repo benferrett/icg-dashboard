@@ -100,7 +100,6 @@ export function StrategistsView({
             <TableHeader>
               <TableRow>
                 <TableHead>Strategist</TableHead>
-                <TableHead className="text-right">DS booked</TableHead>
                 <TableHead className="text-right">DS sat</TableHead>
                 <TableHead className="text-right">Memberships sold</TableHead>
                 <TableHead className="text-right">Close rate</TableHead>
@@ -112,7 +111,7 @@ export function StrategistsView({
               {loading || !d
                 ? Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      <TableCell colSpan={7}>
+                      <TableCell colSpan={6}>
                         <Skeleton className="h-5 w-full" />
                       </TableCell>
                     </TableRow>
@@ -123,9 +122,6 @@ export function StrategistsView({
                       data-testid={`row-strategist-${s.name}`}
                     >
                       <TableCell className="font-medium">{s.name}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {fmtNumber(s.dsBooked)}
-                      </TableCell>
                       <TableCell className="text-right tabular-nums">
                         {fmtNumber(s.dsSat)}
                       </TableCell>
@@ -165,9 +161,6 @@ export function StrategistsView({
               {!loading && d && d.strategists.length > 0 && (
                 <TableRow className="border-t-2 font-medium">
                   <TableCell>Team total</TableCell>
-                  <TableCell className="text-right tabular-nums">
-                    {fmtNumber(totalBooked)}
-                  </TableCell>
                   <TableCell className="text-right tabular-nums">
                     {fmtNumber(totalSat)}
                   </TableCell>
