@@ -147,6 +147,9 @@ export interface ContractsData {
   pipelineValue: number;
   funnel: ContractStep[];
   byStrategist: ContractStrategistRow[];
+  // EOI / UC milestone counts split by the client's lead source (EMBR/META).
+  eoiBySource: { EMBR: number; META: number };
+  ucBySource: { EMBR: number; META: number };
   steps: { key: string; label: string }[];
   recent: ContractDeal[];
   // Full list of every contract deal in the selected period (no cap).

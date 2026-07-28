@@ -1469,19 +1469,34 @@ async function contracts(range: PeriodRange) {
   const dealIds = deals.map((d) => d.id);
   const dealStrategist: Record<string, string> = {};
 
-  // Only do the (slower) contact-association lookup for deals missing the
-  // strategist field, to keep this fast.
-  const needContactLookup = deals
-    .filter((d) => !(d.properties as any).strategist)
-    .map((d) => d.id);
+  // For lead-source attribution (Funnel Performance tab) we need the client
+  // contact's source props for EVERY contract deal, not just those missing the
+  // strategist field. So associate ALL deals -> contacts once, then read owner
+  // + booking-source props together. `dealSource` maps each deal to its client
+  // lead source (EMBR / META / null) via the same bookingSourceOf rule used by
+  // the DS funnel, so EOI/UC ties to the same source cohorts.
+  const allDealIds = deals.map((d) => d.id);
   let assoc: Record<string, string[]> = {};
   let contactOwners: Record<string, Record<string, string | undefined>> = {};
-  if (needContactLookup.length) {
-    assoc = await hubspot.batchAssociations("deals", "contacts", needContactLookup);
+  const dealSource: Record<string, "EMBR" | "META" | null> = {};
+  if (allDealIds.length) {
+    assoc = await hubspot.batchAssociations("deals", "contacts", allDealIds);
     const allContactIds = Array.from(new Set(Object.values(assoc).flat()));
     contactOwners = allContactIds.length
-      ? await hubspot.batchRead("contacts", allContactIds, ["hubspot_owner_id"])
+      ? await hubspot.batchRead("contacts", allContactIds, [
+          "hubspot_owner_id",
+          ...BOOKING_SOURCE_PROPS,
+        ])
       : {};
+    for (const d of deals) {
+      const cids = assoc[d.id] || [];
+      const srcs = cids.map((cid) => bookingSourceOf(contactOwners[cid] as any));
+      dealSource[d.id] = srcs.includes("EMBR")
+        ? "EMBR"
+        : srcs.includes("META")
+          ? "META"
+          : null;
+    }
   }
 
   for (const d of deals) {
@@ -1559,6 +1574,11 @@ async function contracts(range: PeriodRange) {
     steps[s.key] = { count: 0, value: 0, byStrategist: {} };
   }
 
+  // Per-lead-source EOI / UC counts (client contact's source). Deals whose
+  // client is not EMBR/META (direct, organic, referral) fall into neither.
+  const eoiBySource = { EMBR: 0, META: 0 };
+  const ucBySource = { EMBR: 0, META: 0 };
+
   let pipelineValue = 0;
   // Full per-deal list (no cap) for the EOI / UC listing section. Each deal may
   // be BOTH an EOI and a UC (it did its EOI then progressed to UC); the listing
@@ -1616,15 +1636,18 @@ async function contracts(range: PeriodRange) {
     // EOI + UC are cumulative milestones (count if their milestone date is in
     // the period). The middle steps are current-stage (count if the deal is in
     // that stage now AND entered it within the period).
+    const dsrc = dealSource[d.id];
     if (eoiInPeriod) {
       steps.eoi.count++;
       steps.eoi.value += amt;
       steps.eoi.byStrategist[owner] = (steps.eoi.byStrategist[owner] || 0) + 1;
+      if (dsrc) eoiBySource[dsrc]++;
     }
     if (ucInPeriod) {
       steps.uc.count++;
       steps.uc.value += amt;
       steps.uc.byStrategist[owner] = (steps.uc.byStrategist[owner] || 0) + 1;
+      if (dsrc) ucBySource[dsrc]++;
     }
     if (!isFake && currentStep && currentStep !== "eoi" && currentStep !== "uc") {
       // issued / signed / exchanged — current stage, period by entered date.
@@ -1705,6 +1728,8 @@ async function contracts(range: PeriodRange) {
     pipelineValue,
     funnel,
     byStrategist,
+    eoiBySource,
+    ucBySource,
     steps: CONTRACT_FUNNEL_STEPS.map((s) => ({ key: s.key, label: s.label })),
     recent: recentList,
     deals: deals_out,

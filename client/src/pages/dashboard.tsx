@@ -20,6 +20,7 @@ import {
   Target,
   FileSignature,
   TrendingUp,
+  GitCompareArrows,
   AlertTriangle,
   Moon,
   Sun,
@@ -32,10 +33,12 @@ import { ConsultantsView } from "./views/ConsultantsView";
 import { StrategistsView } from "./views/StrategistsView";
 import { ContractsView } from "./views/ContractsView";
 import { BusinessPerformanceView } from "./views/BusinessPerformanceView";
+import { FunnelPerformanceView } from "./views/FunnelPerformanceView";
 
 type TabKey =
   | "overview"
   | "marketing"
+  | "funnel"
   | "consultants"
   | "strategists"
   | "contracts"
@@ -44,6 +47,11 @@ type TabKey =
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <LayoutDashboard className="h-4 w-4" /> },
   { key: "marketing", label: "Marketing", icon: <Megaphone className="h-4 w-4" /> },
+  {
+    key: "funnel",
+    label: "Funnel Performance",
+    icon: <GitCompareArrows className="h-4 w-4" />,
+  },
   { key: "consultants", label: "Consultants", icon: <Users className="h-4 w-4" /> },
   { key: "strategists", label: "Strategists", icon: <Target className="h-4 w-4" /> },
   { key: "contracts", label: "Contracts", icon: <FileSignature className="h-4 w-4" /> },
@@ -262,6 +270,13 @@ export default function DashboardPage({
           )}
           {tab === "strategists" && (
             <StrategistsView d={d} loading={loading} periodLabel={periodLabel} />
+          )}
+          {tab === "funnel" && (
+            <FunnelPerformanceView
+              d={d}
+              loading={loading}
+              periodLabel={periodLabel}
+            />
           )}
           {tab === "contracts" && (
             <ContractsView d={d} loading={loading} periodLabel={periodLabel} />
