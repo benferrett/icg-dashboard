@@ -7,6 +7,7 @@ import {
   stageName,
   PIPELINES,
   MEMBERSHIP_STAGES,
+  MEMBERSHIP_REFUND_STAGE,
   MEMBERSHIP_SOLD_STAGES,
   DISCOVERY_BOOKED_STAGE,
   DS_SAT_STAGES,
@@ -1024,6 +1025,55 @@ async function membershipsSold(
     // gracefully rather than blocking the sold count.
   }
 
+  // ---- Refunded / cancelled memberships -------------------------------------
+  // A membership that was sold then cancelled/refunded sits in the dedicated
+  // "DS Sat - Membership Cancelled/Refund" stage (3152097752). Count deals in
+  // that stage whose closedate falls in the window, split by the client's lead
+  // source with the same bookingSourceOf rule used for sold. refundsBySource
+  // .EMBR + .META can be < refundTotal (untagged direct/organic clients).
+  let refundTotal = 0;
+  const refundsBySource = { EMBR: 0, META: 0 };
+  try {
+    const refundDeals = await hubspot.searchObjects(
+      "deals",
+      {
+        filterGroups: [
+          {
+            filters: [
+              {
+                propertyName: "dealstage",
+                operator: "EQ",
+                value: MEMBERSHIP_REFUND_STAGE,
+              },
+            ],
+          },
+        ],
+        properties: ["dealstage", "closedate", "dealname"],
+      },
+      3000,
+    );
+    const inWindow = refundDeals.filter((d) => {
+      const c = d.properties.closedate;
+      return c && c >= startIso && c < endIso;
+    });
+    refundTotal = inWindow.length;
+    const refundIds = inWindow.map((d) => d.id);
+    if (refundIds.length) {
+      const rAssoc = await hubspot.batchAssociations("deals", "contacts", refundIds);
+      const rContactIds = Array.from(new Set(Object.values(rAssoc).flat()));
+      const rProps = rContactIds.length
+        ? await hubspot.batchRead("contacts", rContactIds, BOOKING_SOURCE_PROPS)
+        : {};
+      for (const id of refundIds) {
+        const srcs = (rAssoc[id] || []).map((cid) => bookingSourceOf(rProps[cid]));
+        if (srcs.includes("EMBR")) refundsBySource.EMBR++;
+        else if (srcs.includes("META")) refundsBySource.META++;
+      }
+    }
+  } catch {
+    // Refund count degrades to zero on failure rather than blocking the sold count.
+  }
+
   return {
     total,
     tiers,
@@ -1034,6 +1084,8 @@ async function membershipsSold(
     followUpTotal,
     byChannel,
     soldBySource,
+    refundTotal,
+    refundsBySource,
   };
 }
 
@@ -1062,9 +1114,11 @@ interface FunnelWindow {
       sat: number;
       bookedSat: number;
       sold: number;
+      refunded: number;
     }
   >;
   membershipsSold: number;
+  membershipsRefunded: number;
   membershipTiers: Record<string, number>;
 }
 
@@ -1092,10 +1146,19 @@ async function salesFunnel(range: PeriodRange) {
       dsSat: ds.sat,
       dsBookedSat: ds.bookedSat,
       dsBySource: {
-        EMBR: { ...ds.bySource.EMBR, sold: sold.soldBySource.EMBR },
-        META: { ...ds.bySource.META, sold: sold.soldBySource.META },
+        EMBR: {
+          ...ds.bySource.EMBR,
+          sold: sold.soldBySource.EMBR,
+          refunded: sold.refundsBySource.EMBR,
+        },
+        META: {
+          ...ds.bySource.META,
+          sold: sold.soldBySource.META,
+          refunded: sold.refundsBySource.META,
+        },
       },
       membershipsSold: sold.total,
+      membershipsRefunded: sold.refundTotal,
       membershipTiers: sold.tiers,
     };
     return {

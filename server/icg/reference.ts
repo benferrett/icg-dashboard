@@ -138,6 +138,9 @@ export const MEMBERSHIP_STAGES = {
   gold: "2547683827",
 };
 
+// Membership that was sold then cancelled/refunded lives in this stage.
+export const MEMBERSHIP_REFUND_STAGE = "3152097752";
+
 export const DISCOVERY_BOOKED_STAGE = "2870714823";
 
 // Booking consultants who work fresh leads + book Discovery Sessions.

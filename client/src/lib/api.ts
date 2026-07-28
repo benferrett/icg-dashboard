@@ -205,9 +205,11 @@ export interface FunnelWindow {
       sat: number;
       bookedSat: number;
       sold: number;
+      refunded: number;
     }
   >;
   membershipsSold: number;
+  membershipsRefunded: number;
   membershipTiers: Record<string, number>;
 }
 

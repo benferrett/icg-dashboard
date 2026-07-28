@@ -49,6 +49,7 @@ interface FunnelRow {
   booked: number;
   sat: number;
   sold: number;
+  refunded: number;
   eoi: number;
   uc: number;
   pctBooked: number | null;
@@ -84,6 +85,7 @@ export function FunnelPerformanceView({
     const booked = lb?.booked ?? bs?.booked ?? 0;
     const sat = bs?.sat ?? 0;
     const sold = bs?.sold ?? 0;
+    const refunded = bs?.refunded ?? 0;
     const eoi = d?.contracts.eoiBySource?.[key] ?? 0;
     const uc = d?.contracts.ucBySource?.[key] ?? 0;
     return {
@@ -94,6 +96,7 @@ export function FunnelPerformanceView({
       booked,
       sat,
       sold,
+      refunded,
       eoi,
       uc,
       pctBooked: pct(booked, leads),
@@ -113,6 +116,7 @@ export function FunnelPerformanceView({
     booked: embr.booked + meta.booked,
     sat: embr.sat + meta.sat,
     sold: embr.sold + meta.sold,
+    refunded: embr.refunded + meta.refunded,
     eoi: embr.eoi + meta.eoi,
     uc: embr.uc + meta.uc,
   };
@@ -194,16 +198,16 @@ export function FunnelPerformanceView({
               accent
             />
             <Stat
-              label={`Meta · lead → member`}
-              value={pct(meta.sold, meta.leads) == null ? "—" : fmtPct(pct(meta.sold, meta.leads)!)}
-              sub={`${fmtNumber(meta.sold)} of ${fmtNumber(meta.leads)} leads`}
-              testId="funnel-meta-e2e"
+              label={`Members · ${period}`}
+              value={`${fmtNumber(both.sold)}`}
+              sub={`Meta ${fmtNumber(meta.sold)} · EMBR ${fmtNumber(embr.sold)}`}
+              testId="funnel-total-members"
             />
             <Stat
-              label={`EMBR · lead → member`}
-              value={pct(embr.sold, embr.leads) == null ? "—" : fmtPct(pct(embr.sold, embr.leads)!)}
-              sub={`${fmtNumber(embr.sold)} of ${fmtNumber(embr.leads)} leads`}
-              testId="funnel-embr-e2e"
+              label={`Refunded · ${period}`}
+              value={`${fmtNumber(both.refunded)}`}
+              sub={`net ${fmtNumber(both.sold - both.refunded)} members`}
+              testId="funnel-total-refunds"
             />
             <Stat
               label={`UC · ${period}`}
@@ -234,7 +238,7 @@ export function FunnelPerformanceView({
               </TableHeader>
               <TableBody>
                 {loading || !d ? (
-                  Array.from({ length: 7 }).map((_, i) => (
+                  Array.from({ length: 9 }).map((_, i) => (
                     <TableRow key={i}>
                       <TableCell colSpan={4}>
                         <Skeleton className="h-5 w-full" />
@@ -292,6 +296,58 @@ export function FunnelPerformanceView({
                       {cell(meta, "pctMembership")}
                       <TableCell className="text-right tabular-nums font-medium">
                         {val(bothRates.pctMembership)}
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-medium">
+                        Members (total)
+                        <span className="block text-xs text-muted-foreground">
+                          memberships signed
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(embr.sold)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(meta.sold)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {fmtNumber(both.sold)}
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-medium">
+                        Refunded members
+                        <span className="block text-xs text-muted-foreground">
+                          cancelled / refunded
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {embr.refunded > 0 ? (
+                          <span className="text-destructive">
+                            {fmtNumber(embr.refunded)}
+                          </span>
+                        ) : (
+                          fmtNumber(embr.refunded)
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {meta.refunded > 0 ? (
+                          <span className="text-destructive">
+                            {fmtNumber(meta.refunded)}
+                          </span>
+                        ) : (
+                          fmtNumber(meta.refunded)
+                        )}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {both.refunded > 0 ? (
+                          <span className="text-destructive">
+                            {fmtNumber(both.refunded)}
+                          </span>
+                        ) : (
+                          fmtNumber(both.refunded)
+                        )}
                       </TableCell>
                     </TableRow>
                     <TableRow>
