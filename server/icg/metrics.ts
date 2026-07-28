@@ -1244,9 +1244,21 @@ async function consultantTeam(
     leadsByConsultant[fc.name] = fc.leads;
   }
 
-  // Build exactly one row per canonical booking consultant.
+  // Build one row per canonical booking consultant, PLUS an "Unattributed" row
+  // whenever there is any Unattributed DS activity (a session booked directly
+  // into a strategist's calendar, or a lead with no booking-consultant owner in
+  // its history). Those sessions ARE part of the headline booked / scheduled /
+  // sat totals shown on the Overview tab, so they must appear here too —
+  // otherwise the consultant-tab column sums drift below the Overview figure
+  // (e.g. scheduled off by the number of strategist-direct sessions). Including
+  // the row makes every consultant column reconcile exactly with Overview.
   const names = Array.from(new Set(Object.values(BOOKING_CONSULTANTS)));
-  return names
+  const hasUnattributed =
+    (bookedByConsultant["Unattributed"] || 0) > 0 ||
+    (scheduledByConsultant["Unattributed"] || 0) > 0 ||
+    (satByConsultant["Unattributed"] || 0) > 0;
+  const rowNames = hasUnattributed ? [...names, "Unattributed"] : names;
+  return rowNames
     .map((name) => {
       const dsBooked = bookedByConsultant[name] || 0;
       const dsScheduled = scheduledByConsultant[name] || 0;
