@@ -17,6 +17,8 @@ import {
   ResponsiveContainer,
   BarChart,
   Bar,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -150,6 +152,40 @@ export function FunnelPerformanceView({
       step: "UC of EOI %",
       EMBR: embr.pctUcOfEoi ?? 0,
       Meta: meta.pctUcOfEoi ?? 0,
+    },
+  ];
+
+  // Cumulative retention: what % of each source's ORIGINAL leads survive to each
+  // stage. Shows the full drop-off curve per channel (100% at Leads, decreasing).
+  // `pctOfLeads` is null-safe when a source has zero leads.
+  const pctOfLeads = (n: number, leads: number): number | null =>
+    leads > 0 ? Math.round((n / leads) * 1000) / 10 : null;
+  const retentionData = [
+    { stage: "Leads", EMBR: embr.leads > 0 ? 100 : 0, Meta: meta.leads > 0 ? 100 : 0 },
+    {
+      stage: "Booked",
+      EMBR: pctOfLeads(embr.booked, embr.leads) ?? 0,
+      Meta: pctOfLeads(meta.booked, meta.leads) ?? 0,
+    },
+    {
+      stage: "Sat",
+      EMBR: pctOfLeads(embr.sat, embr.leads) ?? 0,
+      Meta: pctOfLeads(meta.sat, meta.leads) ?? 0,
+    },
+    {
+      stage: "Member",
+      EMBR: pctOfLeads(embr.sold, embr.leads) ?? 0,
+      Meta: pctOfLeads(meta.sold, meta.leads) ?? 0,
+    },
+    {
+      stage: "EOI",
+      EMBR: pctOfLeads(embr.eoi, embr.leads) ?? 0,
+      Meta: pctOfLeads(meta.eoi, meta.leads) ?? 0,
+    },
+    {
+      stage: "UC",
+      EMBR: pctOfLeads(embr.uc, embr.leads) ?? 0,
+      Meta: pctOfLeads(meta.uc, meta.leads) ?? 0,
     },
   ];
 
@@ -497,6 +533,71 @@ export function FunnelPerformanceView({
             </div>
           )}
         </Card>
+      </Section>
+
+      {/* Cumulative retention curve: % of each source's leads reaching each stage */}
+      <Section title={`Lead retention by source · ${period}`}>
+        <Card className="p-4">
+          {loading || !d ? (
+            <Skeleton className="h-72 w-full" />
+          ) : (
+            <div className="h-72" data-testid="chart-retention">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart
+                  data={retentionData}
+                  margin={{ top: 8, right: 16, left: 0, bottom: 4 }}
+                >
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} opacity={0.3} />
+                  <XAxis
+                    dataKey="stage"
+                    tick={{ fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 12 }}
+                    tickLine={false}
+                    axisLine={false}
+                    tickFormatter={(v) => `${v}%`}
+                    width={44}
+                  />
+                  <Tooltip
+                    formatter={(v: number) => `${v}% of leads`}
+                    contentStyle={{
+                      borderRadius: 8,
+                      border: "1px solid hsl(var(--border))",
+                      background: "hsl(var(--popover))",
+                      fontSize: 12,
+                    }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 12 }} />
+                  <Line
+                    type="monotone"
+                    dataKey="EMBR"
+                    stroke={EMBR_COLOR}
+                    strokeWidth={2.5}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                  />
+                  <Line
+                    type="monotone"
+                    dataKey="Meta"
+                    stroke={META_COLOR}
+                    strokeWidth={2.5}
+                    dot={{ r: 3 }}
+                    activeDot={{ r: 5 }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+        </Card>
+        <p className="text-xs text-muted-foreground mt-3">
+          Each line shows the share of that source's original leads still
+          present at each stage — a cumulative view of how far EMBR vs Meta
+          leads travel down the funnel. Both start at 100% (Leads) and decline
+          through Booked, Sat, Member, EOI and UC.
+        </p>
       </Section>
     </div>
   );
