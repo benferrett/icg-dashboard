@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { apiGet, Dashboard, MetaData, PeriodKey, PERIOD_OPTIONS } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { Logo } from "@/components/dashboard/Logo";
+import { DateRangePicker, CustomRange } from "@/components/dashboard/DateRangePicker";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -85,6 +86,14 @@ export default function DashboardPage({
   const [tab, setTab] = useState<TabKey>("overview");
   const [navOpen, setNavOpen] = useState(false);
 
+  // Funnel + Business tabs use a plain preset window (no custom calendar), so a
+  // lingering custom range must be cleared when navigating to them.
+  function goToTab(next: TabKey) {
+    if ((next === "funnel" || next === "business") && custom) setCustom(null);
+    setTab(next);
+    setNavOpen(false);
+  }
+
   // Query string + cache key segment for whichever range is active.
   const rangeQS = custom
     ? `start=${custom.start}&end=${custom.end}`
@@ -135,10 +144,7 @@ export default function DashboardPage({
         <button
           key={t.key}
           data-testid={`nav-${t.key}`}
-          onClick={() => {
-            setTab(t.key);
-            setNavOpen(false);
-          }}
+          onClick={() => goToTab(t.key)}
           className={`flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors text-left ${
             tab === t.key
               ? "bg-primary/10 text-primary"
@@ -173,7 +179,9 @@ export default function DashboardPage({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {tab !== "business" && (
+          {/* Funnel keeps a plain preset window (no custom calendar); Business
+              has no selector; every other tab gets the hybrid range picker. */}
+          {tab === "funnel" && (
             <Select value={period} onValueChange={(v) => setPeriod(v as PeriodKey)}>
               <SelectTrigger className="w-[140px] h-9" data-testid="select-period">
                 <SelectValue />
@@ -186,6 +194,17 @@ export default function DashboardPage({
                 ))}
               </SelectContent>
             </Select>
+          )}
+          {tab !== "funnel" && tab !== "business" && (
+            <DateRangePicker
+              preset={custom ? null : period}
+              custom={custom}
+              onSelectPreset={(k) => {
+                setCustom(null);
+                setPeriod(k);
+              }}
+              onSelectCustom={(r) => setCustom(r)}
+            />
           )}
           <span className="hidden md:inline text-xs text-muted-foreground tabular-nums">
             {d ? `Updated ${timeAgo(d.generatedAt)}` : "Loading…"}
