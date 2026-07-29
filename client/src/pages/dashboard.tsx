@@ -79,16 +79,25 @@ export default function DashboardPage({
   const { dark, toggle } = useDarkMode();
   const [refreshing, setRefreshing] = useState(false);
   const [period, setPeriod] = useState<PeriodKey>("this_week");
+  // When the user picks a custom calendar range, `custom` is set and takes
+  // priority over `period`. Selecting a preset clears it.
+  const [custom, setCustom] = useState<CustomRange | null>(null);
   const [tab, setTab] = useState<TabKey>("overview");
   const [navOpen, setNavOpen] = useState(false);
 
+  // Query string + cache key segment for whichever range is active.
+  const rangeQS = custom
+    ? `start=${custom.start}&end=${custom.end}`
+    : `period=${period}`;
+  const rangeKey = custom ? `custom:${custom.start}:${custom.end}` : period;
+
   const dash = useQuery<Dashboard>({
-    queryKey: ["/api/dashboard", period],
-    queryFn: () => apiGet<Dashboard>(`/api/dashboard?period=${period}`, token),
+    queryKey: ["/api/dashboard", rangeKey],
+    queryFn: () => apiGet<Dashboard>(`/api/dashboard?${rangeQS}`, token),
   });
   const meta = useQuery<MetaData>({
-    queryKey: ["/api/meta", period],
-    queryFn: () => apiGet<MetaData>(`/api/meta?period=${period}`, token),
+    queryKey: ["/api/meta", rangeKey],
+    queryFn: () => apiGet<MetaData>(`/api/meta?${rangeQS}`, token),
   });
 
   useEffect(() => {
@@ -103,8 +112,8 @@ export default function DashboardPage({
   async function refresh() {
     setRefreshing(true);
     await Promise.all([
-      apiGet(`/api/dashboard?period=${period}&refresh=1`, token).catch(() => {}),
-      apiGet(`/api/meta?period=${period}&refresh=1`, token).catch(() => {}),
+      apiGet(`/api/dashboard?${rangeQS}&refresh=1`, token).catch(() => {}),
+      apiGet(`/api/meta?${rangeQS}&refresh=1`, token).catch(() => {}),
     ]);
     await Promise.all([dash.refetch(), meta.refetch()]);
     setRefreshing(false);
@@ -113,7 +122,10 @@ export default function DashboardPage({
   const d = dash.data;
   const loading = dash.isLoading;
   const periodLabel =
-    d?.period.label ?? PERIOD_OPTIONS.find((p) => p.key === period)?.label ?? "";
+    d?.period.label ??
+    (custom
+      ? "Custom Range"
+      : PERIOD_OPTIONS.find((p) => p.key === period)?.label ?? "");
 
   const activeTab = TABS.find((t) => t.key === tab)!;
 

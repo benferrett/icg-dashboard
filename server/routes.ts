@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
 import { buildDashboard, businessPerformance } from "./icg/metrics";
-import { parsePeriod } from "./icg/period";
+import { parsePeriod, parseCustomRange } from "./icg/period";
 import { metaAds } from "./icg/meta";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
@@ -116,6 +116,22 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/dashboard", requireAuth, async (req, res) => {
     try {
       const force = req.query.refresh === "1";
+      // Custom calendar range (start/end = YYYY-MM-DD) takes priority over the
+      // preset `period` param. Custom ranges cache on their exact bounds so a
+      // repeat view of the same range is instant, but they are never pre-warmed.
+      const custom = parseCustomRange(
+        req.query.start as string | undefined,
+        req.query.end as string | undefined,
+      );
+      if (custom) {
+        const data = await cached(
+          `dashboard:custom:${custom.start}:${custom.end}`,
+          () => buildDashboard(custom),
+          force,
+        );
+        res.json(data);
+        return;
+      }
       // Normalise the requested period so the cache key matches a known window.
       const periodKey = parsePeriod(req.query.period as string | undefined).key;
       const data = await cached(
@@ -149,8 +165,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/meta", requireAuth, async (req, res) => {
     try {
       const force = req.query.refresh === "1";
-      const range = parsePeriod(req.query.period as string | undefined);
-      const data = await cached(`meta:${range.key}`, () => metaAds(range), force);
+      const custom = parseCustomRange(
+        req.query.start as string | undefined,
+        req.query.end as string | undefined,
+      );
+      const range = custom ?? parsePeriod(req.query.period as string | undefined);
+      const cacheKey = custom
+        ? `meta:custom:${range.start}:${range.end}`
+        : `meta:${range.key}`;
+      const data = await cached(cacheKey, () => metaAds(range), force);
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ status: "error", message: e?.message || "Meta failed" });

@@ -238,7 +238,7 @@ export function FunnelPerformanceView({
               </TableHeader>
               <TableBody>
                 {loading || !d ? (
-                  Array.from({ length: 9 }).map((_, i) => (
+                  Array.from({ length: 11 }).map((_, i) => (
                     <TableRow key={i}>
                       <TableCell colSpan={4}>
                         <Skeleton className="h-5 w-full" />
@@ -261,6 +261,23 @@ export function FunnelPerformanceView({
                     </TableRow>
                     <TableRow>
                       <TableCell className="font-medium">
+                        DS Booked
+                        <span className="block text-xs text-muted-foreground">
+                          sessions booked
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(embr.booked)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(meta.booked)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {fmtNumber(both.booked)}
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-medium">
                         % Booked
                         <span className="block text-xs text-muted-foreground">
                           booked ÷ leads
@@ -270,6 +287,23 @@ export function FunnelPerformanceView({
                       {cell(meta, "pctBooked")}
                       <TableCell className="text-right tabular-nums font-medium">
                         {val(bothRates.pctBooked)}
+                      </TableCell>
+                    </TableRow>
+                    <TableRow>
+                      <TableCell className="font-medium">
+                        Sat
+                        <span className="block text-xs text-muted-foreground">
+                          sessions attended
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(embr.sat)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {fmtNumber(meta.sat)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">
+                        {fmtNumber(both.sat)}
                       </TableCell>
                     </TableRow>
                     <TableRow>

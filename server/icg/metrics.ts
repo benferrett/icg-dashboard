@@ -2171,8 +2171,11 @@ export async function businessPerformance(granularityRaw?: string) {
 }
 
 // ---- Top-level orchestrator ------------------------------------------------
-export async function buildDashboard(periodKey?: string) {
-  const range = parsePeriod(periodKey);
+export async function buildDashboard(period?: string | PeriodRange) {
+  // Accept either a preset key (string) or a fully-resolved PeriodRange (used
+  // for custom calendar ranges, which parsePeriod can't produce).
+  const range: PeriodRange =
+    typeof period === "object" && period !== null ? period : parsePeriod(period);
   // salesFunnel resolves the DS booking attribution (bookedByConsultant) that
   // consultantTeam needs so the per-consultant DS-booked column reconciles with
   // the headline DS-booked total. Run it first, then feed the map in.

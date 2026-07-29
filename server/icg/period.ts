@@ -8,7 +8,8 @@ export type PeriodKey =
   | "this_month"
   | "last_month"
   | "last_3_months"
-  | "this_year";
+  | "this_year"
+  | "custom";
 
 export const PERIOD_KEYS: PeriodKey[] = [
   "this_week",
@@ -26,6 +27,7 @@ export const PERIOD_LABELS: Record<PeriodKey, string> = {
   last_month: "Last Month",
   last_3_months: "Last 3 Months",
   this_year: "This Year",
+  custom: "Custom Range",
 };
 
 export interface PeriodRange {
@@ -92,6 +94,13 @@ export function resolvePeriod(key: PeriodKey): PeriodRange {
       endMs = nowMs;
       break;
     }
+    default: {
+      // "custom" is never resolved here (it comes via parseCustomRange); fall
+      // back to this-week so startMs/endMs are always assigned.
+      startMs = melMidnightUtc(y, m, d - daysSinceMon);
+      endMs = nowMs;
+      break;
+    }
   }
 
   return { key, label: PERIOD_LABELS[key], start: iso(startMs), end: iso(endMs) };
@@ -101,6 +110,37 @@ export function parsePeriod(raw?: string | null): PeriodRange {
   const key = (raw && (PERIOD_KEYS as string[]).includes(raw) ? raw : "this_week") as PeriodKey;
   return resolvePeriod(key);
 }
+
+// ---- Custom (user-picked calendar) range ----------------------------------
+// Accepts two YYYY-MM-DD dates (Melbourne local calendar days). The range is
+// half-open [start 00:00, endDay+1 00:00) so the END DATE IS INCLUSIVE — picking
+// 1 Jun -> 30 Jun covers all of June. Boundaries use the same Melbourne-midnight
+// -> UTC math as the presets, so custom ranges line up exactly with presets.
+// Returns null if the input is malformed or start is after end.
+const DATE_RE = /^(\d{4})-(\d{2})-(\d{2})$/;
+
+export function parseCustomRange(
+  startRaw?: string | null,
+  endRaw?: string | null,
+): PeriodRange | null {
+  if (!startRaw || !endRaw) return null;
+  const ms = DATE_RE.exec(startRaw);
+  const me = DATE_RE.exec(endRaw);
+  if (!ms || !me) return null;
+  const [, sy, sm, sd] = ms.map(Number) as unknown as [string, number, number, number];
+  const [, ey, em, ed] = me.map(Number) as unknown as [string, number, number, number];
+  const startMs = melMidnightUtc(sy, sm - 1, sd);
+  // End date inclusive -> exclusive boundary is the following midnight.
+  const endMs = melMidnightUtc(ey, em - 1, ed + 1);
+  if (!(startMs < endMs)) return null;
+  const label = `${sd} ${MONTH_ABBR_SHORT[sm - 1]} – ${ed} ${MONTH_ABBR_SHORT[em - 1]}`;
+  return { key: "custom", label, start: iso(startMs), end: iso(endMs) };
+}
+
+const MONTH_ABBR_SHORT = [
+  "Jan", "Feb", "Mar", "Apr", "May", "Jun",
+  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+];
 
 // ---- Trend buckets (Business Performance) ---------------------------------
 // A contiguous series of time buckets (weeks or months) covering roughly the
