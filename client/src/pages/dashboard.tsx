@@ -86,10 +86,10 @@ export default function DashboardPage({
   const [tab, setTab] = useState<TabKey>("overview");
   const [navOpen, setNavOpen] = useState(false);
 
-  // Funnel + Business tabs use a plain preset window (no custom calendar), so a
-  // lingering custom range must be cleared when navigating to them.
+  // Business is the only tab with no range control (it uses rolling trend
+  // buckets), so a lingering custom range must be cleared when navigating to it.
   function goToTab(next: TabKey) {
-    if ((next === "funnel" || next === "business") && custom) setCustom(null);
+    if (next === "business" && custom) setCustom(null);
     setTab(next);
     setNavOpen(false);
   }
@@ -179,23 +179,9 @@ export default function DashboardPage({
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {/* Funnel keeps a plain preset window (no custom calendar); Business
-              has no selector; every other tab gets the hybrid range picker. */}
-          {tab === "funnel" && (
-            <Select value={period} onValueChange={(v) => setPeriod(v as PeriodKey)}>
-              <SelectTrigger className="w-[140px] h-9" data-testid="select-period">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {PERIOD_OPTIONS.map((p) => (
-                  <SelectItem key={p.key} value={p.key} data-testid={`period-${p.key}`}>
-                    {p.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          {tab !== "funnel" && tab !== "business" && (
+          {/* Business has no selector (rolling trend buckets); every other tab
+              — including Funnel — gets the hybrid presets + custom range picker. */}
+          {tab !== "business" && (
             <DateRangePicker
               preset={custom ? null : period}
               custom={custom}
