@@ -53,6 +53,10 @@ export interface Dashboard {
   generatedAt: string;
   cached: boolean;
   cacheAgeSec: number;
+  // Freshness metadata from the snapshot cache (stale-while-revalidate).
+  computedAt?: string;
+  stale?: boolean;
+  updating?: boolean;
   period: { key: PeriodKey; label: string; start: string; end: string };
   pipelines: { id: string; name: string; total: number }[];
   marketing: {

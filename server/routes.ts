@@ -5,6 +5,12 @@ import crypto from "node:crypto";
 import { buildDashboard, businessPerformance } from "./icg/metrics";
 import { parsePeriod, parseCustomRange } from "./icg/period";
 import { metaAds } from "./icg/meta";
+import {
+  readSnapshot,
+  writeSnapshot,
+  readAllSnapshots,
+  snapshotStoreInfo,
+} from "./icg/snapshot-store";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "InnerCircle2026$$";
@@ -16,26 +22,94 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   return res.status(401).json({ error: "Unauthorized" });
 }
 
-// --- Lightweight in-memory cache so the dashboard feels instant + limits API load ---
-// Each entry also remembers HOW to rebuild itself (`fn`), so a background warmer
-// can proactively refresh it just before expiry. That way real visitors almost
-// always hit the warm (~0.1s) path and rarely eat the ~6-15s cold HubSpot fetch.
+// --- Snapshot cache (stale-while-revalidate, disk-backed) -----------------
+// Each entry holds the last computed payload, WHEN it was computed, and HOW to
+// rebuild it (`fn`). Two big behaviours make the dashboard feel instant:
+//
+// 1. STALE-WHILE-REVALIDATE: we ALWAYS serve an existing snapshot immediately —
+//    even an expired one — and kick off a background refresh if it's stale. The
+//    visitor never waits on a cold HubSpot rebuild once ANY snapshot exists.
+//    Only the very first request for a key (nothing on disk or in memory) has
+//    to block on the live fetch.
+//
+// 2. DISK PERSISTENCE: every computed payload is also written to SQLite (on a
+//    Railway volume when one is attached). On boot we seed memory from disk, so
+//    a redeploy/restart no longer wipes the cache — presets and previously
+//    viewed ranges stay instant across deploys.
 interface CacheEntry {
   data: any;
-  expires: number;
+  computedAt: number; // epoch ms when this payload was produced
   fn: () => Promise<any>;
+  refreshing?: boolean; // a background revalidation is already in flight
 }
 const cache = new Map<string, CacheEntry>();
-const TTL_MS = 5 * 60 * 1000; // 5 minutes
+const TTL_MS = 5 * 60 * 1000; // a snapshot older than this is considered stale
+
+// Persist + record a freshly computed payload in both memory and on disk.
+function store(key: string, data: any, fn: () => Promise<any>, computedAt: number) {
+  cache.set(key, { data, computedAt, fn });
+  writeSnapshot(key, data, computedAt);
+}
+
+// Decorate a payload with freshness metadata the UI can display.
+function withMeta(data: any, computedAt: number, updating: boolean) {
+  const ageSec = Math.round((Date.now() - computedAt) / 1000);
+  return {
+    ...data,
+    cached: true,
+    computedAt: new Date(computedAt).toISOString(),
+    cacheAgeSec: ageSec,
+    stale: ageSec > TTL_MS / 1000,
+    updating, // true = a background refresh is running; UI shows "updating…"
+  };
+}
+
+// Trigger a background rebuild for a key without blocking the caller.
+function revalidate(key: string, fn: () => Promise<any>) {
+  const entry = cache.get(key);
+  if (entry?.refreshing) return; // don't stampede
+  if (entry) entry.refreshing = true;
+  fn()
+    .then((data) => store(key, data, fn, Date.now()))
+    .catch((e) => console.error(`[revalidate] ${key} failed:`, (e as any)?.message))
+    .finally(() => {
+      const e2 = cache.get(key);
+      if (e2) e2.refreshing = false;
+    });
+}
 
 async function cached(key: string, fn: () => Promise<any>, force = false) {
-  const hit = cache.get(key);
-  if (!force && hit && hit.expires > Date.now()) {
-    return { ...hit.data, cached: true, cacheAgeSec: Math.round((Date.now() - (hit.expires - TTL_MS)) / 1000) };
+  // Seed memory from disk on first touch after a restart.
+  if (!cache.has(key)) {
+    const disk = readSnapshot(key);
+    if (disk) cache.set(key, { data: disk.payload, computedAt: disk.computedAt, fn });
   }
+
+  const hit = cache.get(key);
+  // Always adopt the caller's real rebuild fn. Disk-seeded / warmer-seeded
+  // entries may carry a placeholder fn; this guarantees a background
+  // revalidation actually re-fetches live data.
+  if (hit) hit.fn = fn;
+
+  // Forced refresh (refresh=1): block on a fresh rebuild.
+  if (force) {
+    const data = await fn();
+    store(key, data, fn, Date.now());
+    return withMeta(data, Date.now(), false);
+  }
+
+  if (hit) {
+    const ageSec = Math.round((Date.now() - hit.computedAt) / 1000);
+    // Serve instantly. If stale, refresh in the background (SWR).
+    if (ageSec > TTL_MS / 1000) revalidate(key, fn);
+    const updating = ageSec > TTL_MS / 1000 || !!cache.get(key)?.refreshing;
+    return withMeta(hit.data, hit.computedAt, updating);
+  }
+
+  // Cold: nothing anywhere. Must block on the first live fetch.
   const data = await fn();
-  cache.set(key, { data, expires: Date.now() + TTL_MS, fn });
-  return { ...data, cached: false, cacheAgeSec: 0 };
+  store(key, data, fn, Date.now());
+  return { ...data, cached: false, computedAt: new Date().toISOString(), cacheAgeSec: 0, stale: false, updating: false };
 }
 
 // --- Background cache warmer ----------------------------------------------
@@ -47,6 +121,7 @@ const WARM_PERIODS = [
   "this_month",
   "last_month",
   "last_3_months",
+  "this_year",
 ];
 const WARM_INTERVAL_MS = 4 * 60 * 1000; // refresh a bit before the 5-min TTL
 let warming = false;
@@ -54,7 +129,7 @@ let warming = false;
 // Rebuild one cache entry in place (used by both seeding and periodic refresh).
 async function warmKey(key: string, fn: () => Promise<any>) {
   const data = await fn();
-  cache.set(key, { data, expires: Date.now() + TTL_MS, fn });
+  store(key, data, fn, Date.now());
 }
 
 async function warmCache() {
@@ -92,6 +167,22 @@ async function warmCache() {
 // Kick off warming on boot (slightly delayed so the server finishes starting),
 // then on a repeating interval. `unref()` keeps the timer from blocking exit.
 function startWarmer() {
+  // Seed the in-memory cache from disk immediately so the very first visitor
+  // after a restart gets an instant (possibly stale) snapshot instead of a
+  // cold rebuild. Background warming then refreshes everything.
+  try {
+    const info = snapshotStoreInfo();
+    const seeded = readAllSnapshots();
+    for (const s of seeded) {
+      if (!cache.has(s.key)) cache.set(s.key, { data: s.payload, computedAt: s.computedAt, fn: async () => s.payload });
+    }
+    console.log(
+      `[warm] seeded ${seeded.length} snapshot(s) from disk (persistent=${info.persistent})`,
+    );
+  } catch (e) {
+    console.error("[warm] disk seed failed:", (e as any)?.message);
+  }
+
   setTimeout(() => {
     warmCache().catch(() => {});
   }, 3000).unref?.();

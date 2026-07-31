@@ -103,6 +103,10 @@ export default function DashboardPage({
   const dash = useQuery<Dashboard>({
     queryKey: ["/api/dashboard", rangeKey],
     queryFn: () => apiGet<Dashboard>(`/api/dashboard?${rangeQS}`, token),
+    // While the backend is refreshing a stale snapshot in the background, poll
+    // so the fresh figures swap in automatically without a manual Refresh.
+    refetchInterval: (q) =>
+      (q.state.data as Dashboard | undefined)?.updating ? 4000 : false,
   });
   const meta = useQuery<MetaData>({
     queryKey: ["/api/meta", rangeKey],
@@ -192,9 +196,19 @@ export default function DashboardPage({
               onSelectCustom={(r) => setCustom(r)}
             />
           )}
-          <span className="hidden md:inline text-xs text-muted-foreground tabular-nums">
-            {d ? `Updated ${timeAgo(d.generatedAt)}` : "Loading…"}
-          </span>
+          {d?.updating ? (
+            <span
+              className="hidden md:inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
+              data-testid="status-updating"
+            >
+              <RefreshCw className="h-3 w-3 animate-spin" />
+              Updating…
+            </span>
+          ) : (
+            <span className="hidden md:inline text-xs text-muted-foreground tabular-nums">
+              {d ? `Updated ${timeAgo(d.generatedAt)}` : "Loading…"}
+            </span>
+          )}
           <Button
             size="sm"
             variant="outline"
