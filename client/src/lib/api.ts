@@ -214,6 +214,9 @@ export interface FunnelWindow {
   >;
   membershipsSold: number;
   membershipsRefunded: number;
+  // Gross members = sold + refunded (headline "Members" KPI). Sign-up % and the
+  // per-source/tier/strategist splits stay on membershipsSold.
+  membershipsTotal: number;
   membershipTiers: Record<string, number>;
 }
 

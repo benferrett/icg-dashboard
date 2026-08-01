@@ -1119,6 +1119,12 @@ interface FunnelWindow {
   >;
   membershipsSold: number;
   membershipsRefunded: number;
+  // Gross members = sold + refunded (all members who signed up in the window,
+  // regardless of a later refund). The headline "Members" KPI uses this so the
+  // count includes refunded members; sign-up % and the per-source/tier/
+  // strategist splits deliberately stay on true `membershipsSold`. A future
+  // "net members" report will surface sold − refunded.
+  membershipsTotal: number;
   membershipTiers: Record<string, number>;
 }
 
@@ -1159,6 +1165,7 @@ async function salesFunnel(range: PeriodRange) {
       },
       membershipsSold: sold.total,
       membershipsRefunded: sold.refundTotal,
+      membershipsTotal: sold.total + sold.refundTotal,
       membershipTiers: sold.tiers,
     };
     return {

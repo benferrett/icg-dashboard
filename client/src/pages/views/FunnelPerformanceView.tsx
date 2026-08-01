@@ -235,8 +235,8 @@ export function FunnelPerformanceView({
             />
             <Stat
               label={`Members · ${period}`}
-              value={`${fmtNumber(both.sold)}`}
-              sub={`Meta ${fmtNumber(meta.sold)} · EMBR ${fmtNumber(embr.sold)}`}
+              value={`${fmtNumber(both.sold + both.refunded)}`}
+              sub={`${fmtNumber(both.sold)} sold + ${fmtNumber(both.refunded)} refunded`}
               testId="funnel-total-members"
             />
             <Stat
