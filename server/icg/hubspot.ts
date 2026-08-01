@@ -3,6 +3,21 @@
 // in production, or the Perplexity credential proxy when running in-preview.
 
 import { apiFetch } from "./proxy";
+import {
+  cacheEnabled,
+  defaultMaxAgeMs,
+  hsKey,
+  readResponse,
+  writeResponse,
+} from "./hs-cache";
+
+// When true, cache MISSES do NOT hit the network — they return an empty-shaped
+// response. Used by the background sync in "replay" verification only; normal
+// requests always allow live fallback. Off by default.
+let FORBID_NETWORK = false;
+export function setForbidNetwork(v: boolean) {
+  FORBID_NETWORK = v;
+}
 
 type DealProps = Record<string, string | undefined>;
 interface Deal {
@@ -69,9 +84,19 @@ async function schedule<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 async function searchPost(payload: any, objectType = "deals"): Promise<any> {
+  const path = `/crm/v3/objects/${objectType}/search`;
+  const key = hsKey("POST", path, payload);
+
+  // Read-through: serve HubSpot's own cached response when present + fresh.
+  if (cacheEnabled()) {
+    const hit = readResponse(key, defaultMaxAgeMs());
+    if (hit) return hit.body;
+  }
+  if (FORBID_NETWORK) return { results: [], total: 0 };
+
   for (let attempt = 0; attempt < 4; attempt++) {
     const res = await schedule(() =>
-      apiFetch("hubspot", `/crm/v3/objects/${objectType}/search`, {
+      apiFetch("hubspot", path, {
         method: "POST",
         body: JSON.stringify(payload),
       }),
@@ -84,7 +109,9 @@ async function searchPost(payload: any, objectType = "deals"): Promise<any> {
       const txt = await res.text();
       throw new Error(`HubSpot search ${res.status}: ${txt.slice(0, 300)}`);
     }
-    return res.json();
+    const json = await res.json();
+    if (cacheEnabled()) writeResponse(key, json);
+    return json;
   }
   throw new Error("HubSpot search failed after retries (rate limited)");
 }
@@ -184,13 +211,25 @@ async function searchAllByTime(
 // whole dashboard section. A dropped chunk slightly understates contacted/
 // connected counts on big windows — acceptable vs. the section erroring out.
 async function apiPostResilient(path: string, payload: any): Promise<any | null> {
+  const key = hsKey("POST", path, payload);
+  // Read-through cache for batch reads / associations / property-history.
+  if (cacheEnabled()) {
+    const hit = readResponse(key, defaultMaxAgeMs());
+    if (hit) return hit.body;
+  }
+  if (FORBID_NETWORK) return null;
+
   for (let attempt = 0; attempt < 4; attempt++) {
     try {
       const res = await apiFetch("hubspot", path, {
         method: "POST",
         body: JSON.stringify(payload),
       });
-      if (res.ok) return res.json();
+      if (res.ok) {
+        const json = await res.json();
+        if (cacheEnabled()) writeResponse(key, json);
+        return json;
+      }
       if (res.status === 429 || res.status >= 500) {
         await sleep(600 * (attempt + 1));
         continue;

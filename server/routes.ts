@@ -11,6 +11,8 @@ import {
   readAllSnapshots,
   snapshotStoreInfo,
 } from "./icg/snapshot-store";
+import { hsCacheInfo, getHsSyncState } from "./icg/hs-cache";
+import { runSync, isSyncing, lastSync } from "./icg/sync";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "InnerCircle2026$$";
@@ -191,6 +193,48 @@ function startWarmer() {
   }, WARM_INTERVAL_MS).unref?.();
 }
 
+// --- HubSpot response-cache sync schedule ---------------------------------
+// FULL sync nightly (off-peak Melbourne) + once shortly after boot if the
+// cache has never been populated. INCREMENTAL every 30 min to keep today's
+// in-progress numbers fresh. All timers unref() so they never block exit.
+const INCREMENTAL_MS = 30 * 60 * 1000;
+const FULL_CHECK_MS = 60 * 60 * 1000; // hourly check for the nightly window
+
+function melHour(): number {
+  const MEL = 10 * 60 * 60 * 1000;
+  return new Date(Date.now() + MEL).getUTCHours();
+}
+
+function startSync() {
+  // Boot: if the response cache has never been fully populated, kick off a full
+  // sync a little after boot (after the warmer's first pass). Otherwise just
+  // run an incremental top-up.
+  setTimeout(() => {
+    const everFull = getHsSyncState("last_full");
+    runSync(everFull ? "incremental" : "full").catch((e) =>
+      console.error("[sync] boot sync failed:", (e as any)?.message),
+    );
+  }, 20_000).unref?.();
+
+  // Incremental top-ups through the day.
+  setInterval(() => {
+    runSync("incremental").catch(() => {});
+  }, INCREMENTAL_MS).unref?.();
+
+  // Nightly full sync: fire once when Melbourne local hour is 03:00-03:59 and
+  // the last full sync wasn't already today.
+  let lastFullDay = "";
+  setInterval(() => {
+    const h = melHour();
+    const MEL = 10 * 60 * 60 * 1000;
+    const today = new Date(Date.now() + MEL).toISOString().slice(0, 10);
+    if (h === 3 && lastFullDay !== today) {
+      lastFullDay = today;
+      runSync("full").catch((e) => console.error("[sync] nightly failed:", (e as any)?.message));
+    }
+  }, FULL_CHECK_MS).unref?.();
+}
+
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   // Login -> returns a session token
   app.post("/api/login", (req, res) => {
@@ -274,8 +318,30 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // Health
   app.get("/api/health", (_req, res) => res.json({ ok: true, time: new Date().toISOString() }));
 
+  // Warehouse / cache status (auth-gated) — useful for verifying the local
+  // HubSpot response cache is populated and fresh.
+  app.get("/api/warehouse", requireAuth, (_req, res) => {
+    res.json({
+      snapshot: snapshotStoreInfo(),
+      hsCache: hsCacheInfo(),
+      sync: { ...lastSync(), running: isSyncing() },
+    });
+  });
+
+  // Manually trigger a sync (auth-gated). ?mode=full|incremental
+  app.post("/api/warehouse/sync", requireAuth, (req, res) => {
+    const mode = (req.query.mode === "incremental" ? "incremental" : "full") as
+      | "full"
+      | "incremental";
+    // Fire-and-forget; returns immediately.
+    runSync(mode).catch((e) => console.error("[sync] manual failed:", e?.message));
+    res.json({ started: true, mode });
+  });
+
   // Begin keeping the common periods warm in the background.
   startWarmer();
+  // Begin the HubSpot response-cache sync schedule.
+  startSync();
 
   return httpServer;
 }
