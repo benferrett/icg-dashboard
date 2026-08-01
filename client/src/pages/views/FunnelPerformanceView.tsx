@@ -235,14 +235,25 @@ export function FunnelPerformanceView({
             />
             <Stat
               label={`Members · ${period}`}
-              value={`${fmtNumber(both.sold + both.refunded)}`}
-              sub={`${fmtNumber(both.sold)} sold + ${fmtNumber(both.refunded)} refunded`}
+              value={`${fmtNumber(
+                d?.salesFunnel?.window?.membershipsTotal ?? both.sold + both.refunded,
+              )}`}
+              sub={`${fmtNumber(
+                d?.salesFunnel?.window?.membershipsSold ?? both.sold,
+              )} sold + ${fmtNumber(
+                d?.salesFunnel?.window?.membershipsRefunded ?? both.refunded,
+              )} refunded`}
               testId="funnel-total-members"
             />
             <Stat
               label={`Refunded · ${period}`}
-              value={`${fmtNumber(both.refunded)}`}
-              sub={`net ${fmtNumber(both.sold - both.refunded)} members`}
+              value={`${fmtNumber(
+                d?.salesFunnel?.window?.membershipsRefunded ?? both.refunded,
+              )}`}
+              sub={`net ${fmtNumber(
+                (d?.salesFunnel?.window?.membershipsSold ?? both.sold) -
+                  (d?.salesFunnel?.window?.membershipsRefunded ?? both.refunded),
+              )} members`}
               testId="funnel-total-refunds"
             />
             <Stat
