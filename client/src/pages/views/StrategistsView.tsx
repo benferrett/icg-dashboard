@@ -305,7 +305,7 @@ export function StrategistsView({
                           <TableHead className="px-2">Tier</TableHead>
                           <TableHead className="px-2">How</TableHead>
                           <TableHead className="px-2 text-right whitespace-nowrap">
-                            Closed
+                            Paid
                           </TableHead>
                         </TableRow>
                       </TableHeader>

@@ -53,6 +53,14 @@ function num(v?: string): number {
   return isNaN(n) ? 0 : n;
 }
 
+// Field the dashboard treats as authoritative for "when the membership was
+// sold/paid". Falls back to closedate on deals that predate the property and
+// have not been backfilled yet, so windowing never collapses to zero.
+const MEMBERSHIP_PAID_DATE_PROP = "membership_paid_date";
+function membershipDateOf(props: Record<string, any>): string | undefined {
+  return props[MEMBERSHIP_PAID_DATE_PROP] || props.closedate || undefined;
+}
+
 // ---- Section helpers -------------------------------------------------------
 
 async function pipelineTotals() {
@@ -838,12 +846,12 @@ async function discoverySessions(startIso: string, endIso: string) {
 }
 
 // Memberships sold in window: for each membership-sold stage, find deals and
-// count those whose CLOSE DATE falls within the window. We count by closedate
-// (rather than hs_v2_date_entered_<stage>) so that a sale entered late in the
-// system but with a corrected close date lands in the month the sale actually
-// happened. For all historical sold deals closedate equals the stage-entry date,
-// so this only shifts deals whose close date was manually corrected. Also returns
-// a per-strategist breakdown (by the deal's `strategist` field) so the strategist
+// count those whose MEMBERSHIP PAID DATE falls within the window (see
+// membershipDateOf — closedate is the fallback until the property is backfilled).
+// We count by that date (rather than hs_v2_date_entered_<stage>) so that a sale
+// entered late in the system but with a corrected date lands in the month the
+// sale actually happened. Also returns a per-strategist breakdown (by the
+// deal's `strategist` field) so the strategist
 // table's "Sold" column uses the SAME definition as this headline figure and
 // ties out to it (deals with no strategist set fall into the headline total but
 // not into any strategist row).
@@ -882,6 +890,7 @@ async function membershipsSold(
         properties: [
           "dealstage",
           "closedate",
+          MEMBERSHIP_PAID_DATE_PROP,
           "strategist",
           "hubspot_owner_id",
           "dealname",
@@ -891,7 +900,7 @@ async function membershipsSold(
     );
     let count = 0;
     for (const d of deals) {
-      const closed = d.properties.closedate;
+      const closed = membershipDateOf(d.properties);
       if (closed && closed >= startIso && closed < endIso) {
         count++;
         // Attribute by the deal's `strategist` field; when it is blank, fall
@@ -1028,7 +1037,7 @@ async function membershipsSold(
   // ---- Refunded / cancelled memberships -------------------------------------
   // A membership that was sold then cancelled/refunded sits in the dedicated
   // "DS Sat - Membership Cancelled/Refund" stage (3152097752). Count deals in
-  // that stage whose closedate falls in the window, split by the client's lead
+  // that stage whose membership paid date falls in the window, split by the lead
   // source with the same bookingSourceOf rule used for sold. refundsBySource
   // .EMBR + .META can be < refundTotal (untagged direct/organic clients).
   let refundTotal = 0;
@@ -1048,12 +1057,12 @@ async function membershipsSold(
             ],
           },
         ],
-        properties: ["dealstage", "closedate", "dealname"],
+        properties: ["dealstage", "closedate", MEMBERSHIP_PAID_DATE_PROP, "dealname"],
       },
       3000,
     );
     const inWindow = refundDeals.filter((d) => {
-      const c = d.properties.closedate;
+      const c = membershipDateOf(d.properties);
       return c && c >= startIso && c < endIso;
     });
     refundTotal = inWindow.length;
@@ -2053,7 +2062,7 @@ export async function businessPerformance(granularityRaw?: string) {
     }
   })();
 
-  // ---- MEMBERS: memberships sold by closedate (exclude Referral) -----------
+  // ---- MEMBERS: memberships sold by membership paid date (exclude Referral) -
   const membersP = (async () => {
     for (const stageId of Object.keys(MEMBERSHIP_SOLD_TIERS)) {
       const deals = await hubspot.searchObjects(
@@ -2062,12 +2071,12 @@ export async function businessPerformance(granularityRaw?: string) {
           filterGroups: [
             { filters: [{ propertyName: "dealstage", operator: "EQ", value: stageId }] },
           ],
-          properties: ["dealstage", "closedate"],
+          properties: ["dealstage", "closedate", MEMBERSHIP_PAID_DATE_PROP],
         },
         3000,
       );
       for (const d of deals) {
-        const bi = bucketOf(parseT(d.properties.closedate));
+        const bi = bucketOf(parseT(membershipDateOf(d.properties)));
         if (bi >= 0) series.members[bi]++;
       }
     }
