@@ -1036,10 +1036,12 @@ async function membershipsSold(
 
   // ---- Refunded / cancelled memberships -------------------------------------
   // A membership that was sold then cancelled/refunded sits in the dedicated
-  // "DS Sat - Membership Cancelled/Refund" stage (3152097752). Count deals in
-  // that stage whose membership paid date falls in the window, split by the lead
-  // source with the same bookingSourceOf rule used for sold. refundsBySource
-  // .EMBR + .META can be < refundTotal (untagged direct/organic clients).
+  // "DS Sat - Membership Cancelled/Refund" stage (3152097752). A membership is
+  // classified as a refund when it is MOVED INTO that stage, so we date each
+  // refund by the stage-entered datetime (hs_v2_date_entered_3152097752), not
+  // closedate (which still points at the original sale date) and not the paid
+  // date. Split by the client's lead source with the same bookingSourceOf rule
+  // used for sold. refundsBySource.EMBR + .META can be < refundTotal (untagged).
   let refundTotal = 0;
   const refundsBySource = { EMBR: 0, META: 0 };
   try {
@@ -1057,12 +1059,20 @@ async function membershipsSold(
             ],
           },
         ],
-        properties: ["dealstage", "closedate", MEMBERSHIP_PAID_DATE_PROP, "dealname"],
+        properties: [
+          "dealstage",
+          "closedate",
+          "hs_v2_date_entered_3152097752",
+          "dealname",
+        ],
       },
       3000,
     );
     const inWindow = refundDeals.filter((d) => {
-      const c = membershipDateOf(d.properties);
+      // Date by when the deal ENTERED the refund stage; fall back to closedate
+      // only if the stage-entered date is somehow unset.
+      const c =
+        d.properties["hs_v2_date_entered_3152097752"] || d.properties.closedate;
       return c && c >= startIso && c < endIso;
     });
     refundTotal = inWindow.length;
@@ -2063,6 +2073,8 @@ export async function businessPerformance(granularityRaw?: string) {
   })();
 
   // ---- MEMBERS: memberships sold by membership paid date (exclude Referral) -
+  // Bucket each sale by membershipDateOf (paid date, closedate fallback),
+  // matching the headline membershipsSold definition.
   const membersP = (async () => {
     for (const stageId of Object.keys(MEMBERSHIP_SOLD_TIERS)) {
       const deals = await hubspot.searchObjects(
