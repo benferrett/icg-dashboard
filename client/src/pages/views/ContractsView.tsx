@@ -35,6 +35,9 @@ export function ContractsView({
   const maxStep = Math.max(1, ...c.funnel.map((f) => f.count));
   const eoiDeals = c.deals.filter((x) => !!x.eoiDate);
   const ucDeals = c.deals.filter((x) => !!x.ucDate);
+  // EOI refunds (deals moved into the EOI Cancelled stage this period). Reported
+  // separately from gross EOI — the deal's EOI still shows in the EOI listing.
+  const refundDeals = (c as any).refunds ?? [];
 
   // Settlement pipelines carry the UC/settled deals. Surface them from the
   // financial pipeline-value split so the contract view shows the full journey
@@ -57,7 +60,7 @@ export function ContractsView({
     rows: typeof c.deals;
     testId: string;
     dateLabel: string;
-    dateField: "eoiDate" | "ucDate";
+    dateField: "eoiDate" | "ucDate" | "refundDate";
   }) => (
     <Card className="p-4 overflow-hidden">
       <div className="flex items-center justify-between">
@@ -311,6 +314,16 @@ export function ContractsView({
             testId="uc"
             dateLabel="UC date"
             dateField="ucDate"
+          />
+        </div>
+        {/* EOI refunds — deals moved into EOI Cancelled this period */}
+        <div className="mt-4">
+          <DealList
+            title={`EOI Refunds · ${periodLabel.toLowerCase()}`}
+            rows={refundDeals}
+            testId="eoi-refund"
+            dateLabel="Refund date"
+            dateField={"refundDate" as any}
           />
         </div>
       </Section>

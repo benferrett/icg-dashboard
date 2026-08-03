@@ -276,6 +276,18 @@ export const CONTRACT_EOI_PIPELINES = [
 // Stage explicitly excluded from the contract funnel (lost / cancelled).
 export const CONTRACT_EXCLUDE_STAGES = ["3112795614"]; // EOI Cancelled
 
+// EOI Refund stage. An EOI that is later refunded/cancelled is MOVED INTO this
+// stage. We report EOIs GROSS: a deal that reached an EOI milestone still counts
+// toward the EOI total even after it lands here (its earliest EOI-stage entered
+// date is retained), and refunds are reported SEPARATELY as their own line,
+// dated by when the deal ENTERED this stage (hs_v2_date_entered_3112795614) —
+// mirroring how membership refunds are dated. The stage stays in
+// CONTRACT_EXCLUDE_STAGES so cancelled deals never count in the middle funnel
+// steps (issued/signed/exchanged) or UC — only their EOI milestone survives.
+export const CONTRACT_EOI_REFUND_STAGE = "3112795614"; // EOI Cancelled
+export const CONTRACT_EOI_REFUND_ENTERED_PROP =
+  "hs_v2_date_entered_3112795614";
+
 // Strategist owner IDs. Contract/settlement deals are owned by the contract
 // team (Raul Garcia), so strategist attribution for contracts must come from
 // the associated CLIENT CONTACT's owner. When a deal has multiple contacts we

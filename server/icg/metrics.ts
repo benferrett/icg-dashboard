@@ -20,6 +20,8 @@ import {
   CONTRACT_UC_PIPELINES,
   CONTRACT_EOI_PIPELINES,
   CONTRACT_EXCLUDE_STAGES,
+  CONTRACT_EOI_REFUND_STAGE,
+  CONTRACT_EOI_REFUND_ENTERED_PROP,
   CONTRACT_STAGE_TO_STEP,
   CONTRACT_EOI_STAGES,
   CONTRACT_UC_STAGE,
@@ -1510,10 +1512,15 @@ async function contracts(range: PeriodRange) {
   const startMs = +new Date(range.start);
   const endMs = +new Date(range.end);
 
-  // Every entered-date property we may need to read (one per funnel stage).
-  const enteredProps = CONTRACT_FUNNEL_STEPS.flatMap((s) =>
-    s.stages.map((id) => `hs_v2_date_entered_${id}`),
-  );
+  // Every entered-date property we may need to read (one per funnel stage),
+  // PLUS the EOI-refund (Cancelled) stage's entered-date so we can date refunds
+  // by when a deal was moved into that stage.
+  const enteredProps = [
+    ...CONTRACT_FUNNEL_STEPS.flatMap((s) =>
+      s.stages.map((id) => `hs_v2_date_entered_${id}`),
+    ),
+    CONTRACT_EOI_REFUND_ENTERED_PROP,
+  ];
   const baseProps = [
     "dealname",
     "dealstage",
@@ -1680,6 +1687,12 @@ async function contracts(range: PeriodRange) {
   const eoiBySource = { EMBR: 0, META: 0 };
   const ucBySource = { EMBR: 0, META: 0 };
 
+  // EOI REFUNDS (reported SEPARATELY from gross EOI). A deal moved into the EOI
+  // Cancelled stage is an EOI refund, dated by when it ENTERED that stage.
+  let eoiRefunds = 0;
+  const eoiRefundsBySource = { EMBR: 0, META: 0 };
+  const refundList: any[] = [];
+
   let pipelineValue = 0;
   // Full per-deal list (no cap) for the EOI / UC listing section. Each deal may
   // be BOTH an EOI and a UC (it did its EOI then progressed to UC); the listing
@@ -1690,7 +1703,14 @@ async function contracts(range: PeriodRange) {
   for (const d of deals) {
     const props = d.properties as any;
     const stage = props.dealstage || "";
-    if (CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
+    // EOI Refund = deal currently in the EOI Cancelled stage. We do NOT skip it
+    // (that is what used to make refunded EOIs vanish). Instead we still let its
+    // EOI milestone count toward GROSS EOI below, and record it as a separate
+    // refund dated by the Cancelled-stage entered date. It is barred from the
+    // middle funnel steps and UC via the !isRefund guards further down.
+    const isRefund = stage === CONTRACT_EOI_REFUND_STAGE;
+    // Any other explicitly-excluded (lost) stage is still dropped entirely.
+    if (!isRefund && CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
 
     const pid = props.pipeline || "";
     const isSettlement = CONTRACT_UC_PIPELINES.includes(pid);
@@ -1750,7 +1770,7 @@ async function contracts(range: PeriodRange) {
       steps.uc.byStrategist[owner] = (steps.uc.byStrategist[owner] || 0) + 1;
       if (dsrc) ucBySource[dsrc]++;
     }
-    if (!isFake && currentStep && currentStep !== "eoi" && currentStep !== "uc") {
+    if (!isRefund && !isFake && currentStep && currentStep !== "eoi" && currentStep !== "uc") {
       // issued / signed / exchanged — current stage, period by entered date.
       const enteredMs = parseT(props[`hs_v2_date_entered_${stage}`]);
       const refMs = !isNaN(enteredMs) ? enteredMs : parseT(props.hs_lastmodifieddate);
@@ -1759,6 +1779,34 @@ async function contracts(range: PeriodRange) {
         b.count++;
         b.value += amt;
         b.byStrategist[owner] = (b.byStrategist[owner] || 0) + 1;
+      }
+    }
+
+    // --- EOI REFUND (separate line) -----------------------------------------
+    // A deal in the EOI Cancelled stage is an EOI refund, dated by when it
+    // ENTERED that stage (fallback closedate). Reported separately from gross
+    // EOI: the deal's EOI milestone above still counts in the month it was
+    // signed, and the refund counts in the month it was cancelled (which may be
+    // a different month). Only count genuine deals (skip fake/test).
+    if (isRefund && !isFake) {
+      const cancMs = (() => {
+        const t = parseT(props[CONTRACT_EOI_REFUND_ENTERED_PROP]);
+        return !isNaN(t) ? t : parseT(props.closedate);
+      })();
+      if (inPeriod(cancMs)) {
+        eoiRefunds++;
+        if (dsrc) eoiRefundsBySource[dsrc]++;
+        refundList.push({
+          name: props.dealname || "Unnamed",
+          step: "eoiRefund",
+          stage: stageName(stage),
+          amount: amt,
+          owner,
+          date: new Date(cancMs).toISOString(),
+          refundDate: new Date(cancMs).toISOString(),
+          eoiDate: eoiIso,
+          url: `https://app.hubspot.com/contacts/442187411/record/0-3/${d.id}`,
+        });
       }
     }
 
@@ -1824,6 +1872,10 @@ async function contracts(range: PeriodRange) {
     .sort((a, b) => +new Date(b.date) - +new Date(a.date));
   const recentList = deals_out.slice(0, 15);
 
+  const refunds_out = refundList
+    .slice()
+    .sort((a, b) => +new Date(b.refundDate) - +new Date(a.refundDate));
+
   return {
     totalContracts: totalInPeriod,
     pipelineValue,
@@ -1831,6 +1883,10 @@ async function contracts(range: PeriodRange) {
     byStrategist,
     eoiBySource,
     ucBySource,
+    // EOI refunds reported separately from gross EOI (see contracts() loop).
+    eoiRefunds,
+    eoiRefundsBySource,
+    refunds: refunds_out,
     steps: CONTRACT_FUNNEL_STEPS.map((s) => ({ key: s.key, label: s.label })),
     recent: recentList,
     deals: deals_out,
@@ -2098,9 +2154,12 @@ export async function businessPerformance(granularityRaw?: string) {
   // Same deal pull + milestone logic as the contracts() section, but bucketed
   // by the EOI-entered / UC-entered date. Excludes Fallover + test records.
   const contractsP = (async () => {
-    const enteredProps = CONTRACT_FUNNEL_STEPS.flatMap((s) =>
-      s.stages.map((id) => `hs_v2_date_entered_${id}`),
-    );
+    const enteredProps = [
+      ...CONTRACT_FUNNEL_STEPS.flatMap((s) =>
+        s.stages.map((id) => `hs_v2_date_entered_${id}`),
+      ),
+      CONTRACT_EOI_REFUND_ENTERED_PROP,
+    ];
     const pipelineIds = [CONTRACT_PIPELINE, ...CONTRACT_UC_PIPELINES];
     const filterGroups: any[] = pipelineIds.map((id) => ({
       filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
@@ -2134,11 +2193,15 @@ export async function businessPerformance(granularityRaw?: string) {
     for (const d of deals) {
       const props = d.properties as any;
       const stage = props.dealstage || "";
-      if (CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
       if (/\btest\b/.test(String(props.dealname || "").toLowerCase())) continue;
+      // EOI is GROSS: a deal in the EOI Cancelled (refund) stage still counts its
+      // EOI milestone below. Any OTHER excluded (lost) stage is dropped, and a
+      // cancelled deal never contributes a UC (it isn't in a UC/settlement stage).
+      const isRefund = stage === CONTRACT_EOI_REFUND_STAGE;
+      if (!isRefund && CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
       const isSettlement = CONTRACT_UC_PIPELINES.includes(props.pipeline || "");
 
-      // EOI milestone = earliest EOI-stage entered date.
+      // EOI milestone = earliest EOI-stage entered date (incl. later-cancelled).
       let eoiMs = NaN;
       for (const sid of CONTRACT_EOI_STAGES) {
         const t = parseT(props[`hs_v2_date_entered_${sid}`]);

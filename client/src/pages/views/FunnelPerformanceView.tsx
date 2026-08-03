@@ -122,6 +122,18 @@ export function FunnelPerformanceView({
     eoi: embr.eoi + meta.eoi,
     uc: embr.uc + meta.uc,
   };
+  // Authoritative GROSS totals (include untagged / direct / referral clients),
+  // sourced from the contract funnel + eoiRefunds rather than the EMBR/META
+  // source split (which only covers tagged clients). EOI is reported GROSS: it
+  // includes deals later cancelled/refunded. Refunds are a SEPARATE line.
+  const eoiFunnel =
+    d?.contracts?.funnel?.find((f: any) => f.key === "eoi")?.count ?? both.eoi;
+  const ucFunnel =
+    d?.contracts?.funnel?.find((f: any) => f.key === "uc")?.count ?? both.uc;
+  const eoiGross = eoiFunnel;
+  const eoiRefunds = d?.contracts?.eoiRefunds ?? 0;
+  const eoiRefundsBySrc = d?.contracts?.eoiRefundsBySource ?? { EMBR: 0, META: 0 };
+
   const bothRates = {
     pctBooked: pct(both.booked, both.leads),
     pctSat: pct(both.sat, both.booked),
@@ -215,9 +227,9 @@ export function FunnelPerformanceView({
   return (
     <div className="flex flex-col gap-8">
       {/* Headline: which channel converts better */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
         {loading || !d ? (
-          Array.from({ length: 4 }).map((_, i) => (
+          Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-lg" />
           ))
         ) : (
@@ -257,8 +269,26 @@ export function FunnelPerformanceView({
               testId="funnel-total-refunds"
             />
             <Stat
+              label={`EOI · ${period}`}
+              value={`${fmtNumber(eoiGross)}`}
+              sub={`gross (incl. refunded) · Meta ${fmtNumber(
+                meta.eoi,
+              )} · EMBR ${fmtNumber(embr.eoi)}`}
+              testId="funnel-total-eoi"
+            />
+            <Stat
+              label={`EOI Refunds · ${period}`}
+              value={`${fmtNumber(eoiRefunds)}`}
+              sub={`net ${fmtNumber(
+                eoiGross - eoiRefunds,
+              )} EOIs · Meta ${fmtNumber(
+                eoiRefundsBySrc.META ?? 0,
+              )} · EMBR ${fmtNumber(eoiRefundsBySrc.EMBR ?? 0)}`}
+              testId="funnel-total-eoi-refunds"
+            />
+            <Stat
               label={`UC · ${period}`}
-              value={`${fmtNumber(both.uc)}`}
+              value={`${fmtNumber(ucFunnel)}`}
               sub={`Meta ${fmtNumber(meta.uc)} · EMBR ${fmtNumber(embr.uc)}`}
               testId="funnel-total-uc"
               accent
