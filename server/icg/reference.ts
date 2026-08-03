@@ -397,3 +397,23 @@ export const BOOKING_SOURCE_PROPS = [
   "embr_lead_id",
   "hs_analytics_source",
 ];
+
+// Friendly lead-source label for a client contact, used in member/deal
+// listings where we want to show a source for EVERY record (not just the
+// paid EMBR/META channels that bookingSourceOf recognises). EMBR and Meta
+// (paid social) keep their canonical labels so they read consistently with
+// the rest of the dashboard; everything else falls back to the HubSpot
+// analytics-source friendly label (Referrals, Direct Traffic, etc.).
+export function leadSourceLabel(
+  contactProps?: {
+    lead_source?: string | null;
+    embr_lead_id?: string | null;
+    hs_analytics_source?: string | null;
+  } | null,
+): string {
+  if (!contactProps) return "Unknown";
+  const canonical = bookingSourceOf(contactProps);
+  if (canonical === "EMBR") return "EMBR";
+  if (canonical === "META") return "Meta";
+  return sourceLabel(contactProps.hs_analytics_source);
+}

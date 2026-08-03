@@ -303,6 +303,7 @@ export function StrategistsView({
                         <TableRow>
                           <TableHead className="px-2">Member</TableHead>
                           <TableHead className="px-2">Tier</TableHead>
+                          <TableHead className="px-2">Source</TableHead>
                           <TableHead className="px-2">How</TableHead>
                           <TableHead className="px-2 text-right whitespace-nowrap">
                             Paid
@@ -328,6 +329,9 @@ export function StrategistsView({
                             </TableCell>
                             <TableCell className="px-2 text-muted-foreground">
                               {m.tier}
+                            </TableCell>
+                            <TableCell className="px-2 text-muted-foreground whitespace-nowrap">
+                              {m.source || "Unknown"}
                             </TableCell>
                             <TableCell className="px-2">
                               <Badge

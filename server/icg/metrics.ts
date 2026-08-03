@@ -30,6 +30,7 @@ import {
   STRATEGIST_NAME_TOKENS,
   bookingSourceOf,
   BOOKING_SOURCE_PROPS,
+  leadSourceLabel,
 } from "./reference";
 
 function isoDaysAgo(days: number): string {
@@ -965,11 +966,13 @@ async function membershipsSold(
   const dealsByStrategist: Record<
     string,
     {
+      id: string;
       name: string;
       tier: string;
       closedate: string;
       onSession: boolean;
       url: string;
+      source: string;
     }[]
   > = {};
   for (const sd of soldDeals) {
@@ -982,11 +985,14 @@ async function membershipsSold(
       if (onSession) b.onSession++;
       else b.followUp++;
       (dealsByStrategist[sd.strat] ||= []).push({
+        id: sd.id,
         name: sd.name,
         tier: sd.tier,
         closedate: sd.closedate,
         onSession,
         url: `https://app.hubspot.com/contacts/442187411/record/0-3/${sd.id}`,
+        // Filled in below once the client contact's lead source is resolved.
+        source: "Unknown",
       });
     }
   }
@@ -1017,6 +1023,10 @@ async function membershipsSold(
       const contactProps = allContactIds.length
         ? await hubspot.batchRead("contacts", allContactIds, BOOKING_SOURCE_PROPS)
         : {};
+      // Deal id -> friendly lead-source label for the member listing. Prefer an
+      // EMBR/META-tagged contact (EMBR wins), else use the first contact's
+      // analytics-source label so every member shows a source.
+      const sourceByDealId: Record<string, string> = {};
       for (const sd of soldDeals) {
         const cids = contactAssoc[sd.id] || [];
         // CAC channel split: legacy rule (any EMBR-tagged contact = EMBR, else Meta).
@@ -1029,6 +1039,24 @@ async function membershipsSold(
         const srcs = cids.map((cid) => bookingSourceOf(contactProps[cid]));
         if (srcs.includes("EMBR")) soldBySource.EMBR++;
         else if (srcs.includes("META")) soldBySource.META++;
+        // Member-listing source label: pick the contact with the strongest
+        // signal (EMBR > META > whatever the first contact reports).
+        const embrCid = cids.find(
+          (cid) => bookingSourceOf(contactProps[cid]) === "EMBR",
+        );
+        const metaCid = cids.find(
+          (cid) => bookingSourceOf(contactProps[cid]) === "META",
+        );
+        const pickCid = embrCid || metaCid || cids[0];
+        sourceByDealId[sd.id] = pickCid
+          ? leadSourceLabel(contactProps[pickCid])
+          : "Unknown";
+      }
+      // Apply the resolved source onto each strategist's member rows.
+      for (const rows of Object.values(dealsByStrategist)) {
+        for (const r of rows) {
+          r.source = sourceByDealId[r.id] || "Unknown";
+        }
       }
     }
   } catch {
@@ -1333,7 +1361,15 @@ async function strategistTeam(
   splitByStrategist: Record<string, { onSession: number; followUp: number }> = {},
   dealsByStrategist: Record<
     string,
-    { name: string; tier: string; closedate: string; onSession: boolean; url: string }[]
+    {
+      id: string;
+      name: string;
+      tier: string;
+      closedate: string;
+      onSession: boolean;
+      url: string;
+      source: string;
+    }[]
   > = {},
   // Per-strategist EOI / UC milestone counts for the selected period, sourced
   // from contracts().byStrategist (which attributes each contract to a

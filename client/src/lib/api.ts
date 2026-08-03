@@ -120,6 +120,7 @@ export interface Dashboard {
       closedate: string;
       onSession: boolean;
       url: string;
+      source: string;
     }[];
   }[];
   memberships: { bronze: number; silver: number; gold: number; total: number };
