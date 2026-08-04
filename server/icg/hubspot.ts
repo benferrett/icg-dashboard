@@ -19,6 +19,19 @@ export function setForbidNetwork(v: boolean) {
   FORBID_NETWORK = v;
 }
 
+// When true, the read-through cache is BYPASSED for reads (every call re-fetches
+// live from HubSpot and overwrites the cache). Used by the background sync so a
+// sync actually pulls today's changes instead of replaying a still-"fresh"
+// (<26h) cached response. Normal user requests leave this off and enjoy the
+// cache. Off by default.
+let FRESH_ONLY = false;
+export function setFreshOnly(v: boolean) {
+  FRESH_ONLY = v;
+}
+export function isFreshOnly(): boolean {
+  return FRESH_ONLY;
+}
+
 type DealProps = Record<string, string | undefined>;
 interface Deal {
   id: string;
@@ -88,7 +101,8 @@ async function searchPost(payload: any, objectType = "deals"): Promise<any> {
   const key = hsKey("POST", path, payload);
 
   // Read-through: serve HubSpot's own cached response when present + fresh.
-  if (cacheEnabled()) {
+  // FRESH_ONLY (background sync) skips the cache so we re-fetch live data.
+  if (cacheEnabled() && !FRESH_ONLY) {
     const hit = readResponse(key, defaultMaxAgeMs());
     if (hit) return hit.body;
   }
@@ -213,7 +227,8 @@ async function searchAllByTime(
 async function apiPostResilient(path: string, payload: any): Promise<any | null> {
   const key = hsKey("POST", path, payload);
   // Read-through cache for batch reads / associations / property-history.
-  if (cacheEnabled()) {
+  // FRESH_ONLY (background sync) skips the cache so we re-fetch live data.
+  if (cacheEnabled() && !FRESH_ONLY) {
     const hit = readResponse(key, defaultMaxAgeMs());
     if (hit) return hit.body;
   }
@@ -366,4 +381,6 @@ export const hubspot = {
   batchAssociations,
   batchRead,
   batchReadWithHistory,
+  setFreshOnly,
+  isFreshOnly,
 };

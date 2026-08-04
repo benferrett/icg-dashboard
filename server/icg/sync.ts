@@ -18,6 +18,7 @@
 
 import { buildDashboard, businessPerformance } from "./metrics";
 import { metaAds } from "./meta";
+import { hubspot } from "./hubspot";
 import { resolvePeriod, parseCustomRange } from "./period";
 import {
   cacheEnabled,
@@ -81,6 +82,11 @@ export async function runSync(mode: "full" | "incremental"): Promise<void> {
   }
   syncing = true;
   const started = Date.now();
+  // Bypass the read-through cache for the duration of the sync so every HubSpot
+  // read re-fetches live and overwrites the cache. Without this a sync just
+  // replays still-"fresh" (<26h) cached responses and never picks up today's
+  // stage changes (e.g. a deal that moved to Unconditional an hour ago).
+  hubspot.setFreshOnly(true);
   try {
     if (mode === "full") {
       // Presets.
@@ -117,6 +123,7 @@ export async function runSync(mode: "full" | "incremental"): Promise<void> {
       hsCacheInfo(),
     );
   } finally {
+    hubspot.setFreshOnly(false);
     syncing = false;
   }
 }

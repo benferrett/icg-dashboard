@@ -195,9 +195,9 @@ function startWarmer() {
 
 // --- HubSpot response-cache sync schedule ---------------------------------
 // FULL sync nightly (off-peak Melbourne) + once shortly after boot if the
-// cache has never been populated. INCREMENTAL every 30 min to keep today's
+// cache has never been populated. INCREMENTAL every 15 min to keep today's
 // in-progress numbers fresh. All timers unref() so they never block exit.
-const INCREMENTAL_MS = 30 * 60 * 1000;
+const INCREMENTAL_MS = 15 * 60 * 1000;
 const FULL_CHECK_MS = 60 * 60 * 1000; // hourly check for the nightly window
 
 function melHour(): number {
