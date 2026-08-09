@@ -14,6 +14,7 @@ import {
   BOOKING_CONSULTANTS,
   isBookingConsultant,
   DS_TITLE_PREFIX,
+  AM_TITLE_PREFIX,
   MEMBERSHIP_SOLD_TIERS,
   CONTRACT_PIPELINE,
   CONTRACT_FUNNEL_STEPS,
@@ -2414,5 +2415,472 @@ export async function buildDashboard(period?: string | PeriodRange) {
     memberships: members,
     contracts: contractData,
     financial: fin,
+  };
+}
+
+// ===========================================================================
+// 2026 REPORTING  —  month-by-month (Jan–Dec 2026)
+// ===========================================================================
+// Per Ben, each month row reports, on a calendar-month (1–last) basis:
+//   • DS Booked   = unique Discovery Sessions CREATED that month (createdate),
+//                   deduped by associated contact (a reschedule = one DS).
+//   • DS Scheduled= unique DS scheduled to be HELD that month (start_time),
+//                   deduped by associated deal — the sit-rate denominator.
+//   • DS Sat      = DS HELD that month whose associated deal is in a DS Sat-*
+//                   stage, deduped by deal (matches Overview "what we saw").
+//   • Sit rate    = DS Sat ÷ DS Scheduled  (same basis as Overview).
+//   • Members / EOI / UC = milestone counts in the month (paid / EOI-entered /
+//                   UC-entered date) — same definitions as Funnel Performance.
+//   • AM Sat      = Portfolio Acquisition Meetings HELD that month (title match).
+//   • AM→EOI %    = of the clients who sat an AM that month, the share whose
+//                   associated deals reached an EOI milestone (bought ≥1 EOI).
+// All month bucketing is by the AEST calendar month (UTC+10).
+
+const MEL_TZ_OFFSET_MS = 10 * 60 * 60 * 1000;
+
+// Build the 12 calendar-month buckets for a given year, expressed as UTC ISO
+// instants at Melbourne-midnight boundaries (start inclusive, end exclusive).
+function melMonthBucketsForYear(year: number) {
+  const buckets: { label: string; monthIdx: number; start: string; end: string }[] = [];
+  const MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  for (let m = 0; m < 12; m++) {
+    // Melbourne-midnight on the 1st of month m = UTC (that midnight) − 10h.
+    const startUtc = Date.UTC(year, m, 1) - MEL_TZ_OFFSET_MS;
+    const endUtc = Date.UTC(year, m + 1, 1) - MEL_TZ_OFFSET_MS;
+    buckets.push({
+      label: `${MONTHS[m]} ${year}`,
+      monthIdx: m,
+      start: new Date(startUtc).toISOString(),
+      end: new Date(endUtc).toISOString(),
+    });
+  }
+  return buckets;
+}
+
+export async function monthlyReport2026(year = 2026) {
+  const buckets = melMonthBucketsForYear(year);
+  const winStartMs = +new Date(buckets[0].start);
+  const winEndMs = +new Date(buckets[buckets.length - 1].end);
+  const bounds = buckets.map((b) => ({ s: +new Date(b.start), e: +new Date(b.end) }));
+  const bucketOf = (t: number): number => {
+    if (isNaN(t) || t < winStartMs || t >= winEndMs) return -1;
+    for (let i = 0; i < bounds.length; i++) {
+      if (t >= bounds[i].s && t < bounds[i].e) return i;
+    }
+    return -1;
+  };
+  const parseT = (s?: string | null) => (s ? +new Date(s) : NaN);
+  const zeros = () => new Array(buckets.length).fill(0);
+
+  const series = {
+    dsBooked: zeros(),
+    dsScheduled: zeros(),
+    dsSat: zeros(),
+    members: zeros(),
+    eois: zeros(),
+    uc: zeros(),
+    amSat: zeros(),
+    amSatWithEoi: zeros(), // AM-sat clients this month who reached an EOI
+  };
+
+  const winStart = buckets[0].start;
+  const winEnd = buckets[buckets.length - 1].end;
+
+  // ---- DS + AM meetings ----------------------------------------------------
+  const meetingsP = (async () => {
+    const mtgProps = ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time"];
+    const [createdMeetings, heldMeetings] = await Promise.all([
+      hubspot.searchObjects(
+        "meetings",
+        {
+          filterGroups: [
+            {
+              filters: [
+                { propertyName: "hs_createdate", operator: "GTE", value: winStart },
+                { propertyName: "hs_createdate", operator: "LT", value: winEnd },
+              ],
+            },
+          ],
+          properties: mtgProps,
+          sorts: [{ propertyName: "hs_createdate", direction: "ASCENDING" }],
+        },
+        6000,
+      ),
+      hubspot.searchObjects(
+        "meetings",
+        {
+          filterGroups: [
+            {
+              filters: [
+                { propertyName: "hs_meeting_start_time", operator: "GTE", value: winStart },
+                { propertyName: "hs_meeting_start_time", operator: "LT", value: winEnd },
+              ],
+            },
+          ],
+          properties: mtgProps,
+          sorts: [{ propertyName: "hs_meeting_start_time", direction: "ASCENDING" }],
+        },
+        6000,
+      ),
+    ]);
+    const title = (m: any) => (m.properties.hs_meeting_title || "");
+    const isDs = (m: any) => title(m).startsWith(DS_TITLE_PREFIX);
+    const isAm = (m: any) => title(m).startsWith(AM_TITLE_PREFIX);
+
+    // Union (dedupe by id) of every DS/AM meeting we touched.
+    const byId: Record<string, any> = {};
+    for (const m of [...createdMeetings, ...heldMeetings]) {
+      if (isDs(m) || isAm(m)) byId[m.id] = m;
+    }
+    const relevant = Object.values(byId) as any[];
+    if (!relevant.length) return;
+    const ids = relevant.map((m) => m.id);
+    const [contactAssoc, dealAssoc] = await Promise.all([
+      hubspot.batchAssociations("meetings", "contacts", ids),
+      hubspot.batchAssociations("meetings", "deals", ids),
+    ]);
+    const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
+    const dealProps = allDealIds.length
+      ? await hubspot.batchRead("deals", allDealIds, ["dealstage"])
+      : ({} as Record<string, any>);
+
+    const dsMeetings = relevant.filter(isDs);
+    const amMeetings = relevant.filter(isAm);
+
+    // DS BOOKED: dedupe by contact per bucket, keep earliest created.
+    const seenBooked: Set<string>[] = buckets.map(() => new Set<string>());
+    const created = dsMeetings
+      .filter((m) => bucketOf(parseT(m.properties.hs_createdate)) >= 0)
+      .sort((a, b) =>
+        (a.properties.hs_createdate || "").localeCompare(b.properties.hs_createdate || ""),
+      );
+    for (const m of created) {
+      const bi = bucketOf(parseT(m.properties.hs_createdate));
+      if (bi < 0) continue;
+      const cids = contactAssoc[m.id] || [];
+      const key = cids.length ? `c:${cids.slice().sort()[0]}` : `m:${m.id}`;
+      if (seenBooked[bi].has(key)) continue;
+      seenBooked[bi].add(key);
+      series.dsBooked[bi]++;
+    }
+
+    // DS SCHEDULED: unique DS to be HELD in a bucket, deduped by deal.
+    const seenSched: Set<string>[] = buckets.map(() => new Set<string>());
+    for (const m of dsMeetings) {
+      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
+      if (bi < 0) continue;
+      const dids = dealAssoc[m.id] || [];
+      const key = dids.length ? `d:${dids.slice().sort()[0]}` : `m:${m.id}`;
+      if (seenSched[bi].has(key)) continue;
+      seenSched[bi].add(key);
+      series.dsScheduled[bi]++;
+    }
+
+    // DS SAT: DS held in a bucket whose associated deal is in a DS Sat-* stage.
+    const seenSat: Set<string>[] = buckets.map(() => new Set<string>());
+    for (const m of dsMeetings) {
+      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
+      if (bi < 0) continue;
+      for (const did of dealAssoc[m.id] || []) {
+        const stage = dealProps[did]?.dealstage;
+        if (stage && DS_SAT_STAGES.includes(stage) && !seenSat[bi].has(did)) {
+          seenSat[bi].add(did);
+          series.dsSat[bi]++;
+        }
+      }
+    }
+
+    // AM SAT: Portfolio Acquisition Meetings held in a bucket, deduped by the
+    // associated contact (one client counts once per month even if two AMs).
+    // For each AM-sat client, remember which bucket so we can later mark those
+    // who reached an EOI. amContactsByBucket[bi] = Set<contactId>.
+    const amContactsByBucket: Set<string>[] = buckets.map(() => new Set<string>());
+    for (const m of amMeetings) {
+      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
+      if (bi < 0) continue;
+      const cids = contactAssoc[m.id] || [];
+      // A held AM = the meeting happened; we count it as "sat". Dedupe by contact
+      // (fallback to meeting id when no contact is associated).
+      const key = cids.length ? cids.slice().sort()[0] : `m:${m.id}`;
+      if (amContactsByBucket[bi].has(key)) continue;
+      amContactsByBucket[bi].add(key);
+      series.amSat[bi]++;
+    }
+
+    // AM → EOI: of the AM-sat clients each month, how many reached an EOI
+    // milestone. We check every deal associated with the AM-sat contact set for
+    // an EOI-entered date on any EOI stage. Gather those contacts' deals.
+    const amContactIds = Array.from(
+      new Set(amContactsByBucket.flatMap((s) => Array.from(s).filter((k) => !k.startsWith("m:")))),
+    );
+    if (amContactIds.length) {
+      const cToDeals = await hubspot.batchAssociations("contacts", "deals", amContactIds);
+      const eoiDealIds = Array.from(new Set(Object.values(cToDeals).flat()));
+      const eoiEnteredProps = CONTRACT_EOI_STAGES.map((s) => `hs_v2_date_entered_${s}`);
+      const eoiDealProps = eoiDealIds.length
+        ? await hubspot.batchRead("deals", eoiDealIds, ["dealstage", ...eoiEnteredProps])
+        : ({} as Record<string, any>);
+      // A contact "bought ≥1 EOI" if any of its deals has an EOI-entered date OR
+      // currently sits in an EOI-or-beyond stage.
+      const contactHasEoi = (cid: string): boolean => {
+        for (const did of cToDeals[cid] || []) {
+          const p = eoiDealProps[did];
+          if (!p) continue;
+          if (CONTRACT_EOI_STAGES.includes(p.dealstage)) return true;
+          if (p.dealstage === CONTRACT_UC_STAGE) return true;
+          for (const sid of CONTRACT_EOI_STAGES) {
+            if (p[`hs_v2_date_entered_${sid}`]) return true;
+          }
+          if (p[`hs_v2_date_entered_${CONTRACT_UC_STAGE}`]) return true;
+        }
+        return false;
+      };
+      buckets.forEach((_, bi) => {
+        for (const cid of amContactsByBucket[bi]) {
+          if (cid.startsWith("m:")) continue;
+          if (contactHasEoi(cid)) series.amSatWithEoi[bi]++;
+        }
+      });
+    }
+  })();
+
+  // ---- MEMBERS: memberships sold by paid date (exclude Referral) -----------
+  const membersP = (async () => {
+    for (const stageId of Object.keys(MEMBERSHIP_SOLD_TIERS)) {
+      const deals = await hubspot.searchObjects(
+        "deals",
+        {
+          filterGroups: [
+            { filters: [{ propertyName: "dealstage", operator: "EQ", value: stageId }] },
+          ],
+          properties: ["dealstage", "closedate", MEMBERSHIP_PAID_DATE_PROP],
+        },
+        4000,
+      );
+      for (const d of deals) {
+        const bi = bucketOf(parseT(membershipDateOf(d.properties)));
+        if (bi >= 0) series.members[bi]++;
+      }
+    }
+  })();
+
+  // ---- EOI + UC milestones (same pull/logic as businessPerformance) --------
+  const contractsP = (async () => {
+    const enteredProps = [
+      ...CONTRACT_FUNNEL_STEPS.flatMap((s) => s.stages.map((id) => `hs_v2_date_entered_${id}`)),
+      CONTRACT_EOI_REFUND_ENTERED_PROP,
+    ];
+    const pipelineIds = [CONTRACT_PIPELINE, ...CONTRACT_UC_PIPELINES];
+    const filterGroups: any[] = pipelineIds.map((id) => ({
+      filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
+    }));
+    for (const psId of CONTRACT_EOI_PIPELINES) {
+      for (const eoiStage of CONTRACT_EOI_STAGES) {
+        filterGroups.push({
+          filters: [
+            { propertyName: "pipeline", operator: "EQ", value: psId },
+            { propertyName: "dealstage", operator: "EQ", value: eoiStage },
+          ],
+        });
+      }
+    }
+    const deals = await hubspot.searchDeals(
+      {
+        filterGroups,
+        properties: [
+          "dealname", "dealstage", "pipeline", "closedate", "createdate",
+          ...enteredProps,
+          `hs_v2_date_entered_${CONTRACT_UC_STAGE}`,
+        ],
+        sorts: [{ propertyName: "hs_lastmodifieddate", direction: "DESCENDING" }],
+      },
+      4000,
+    );
+    for (const d of deals) {
+      const props = d.properties as any;
+      const stage = props.dealstage || "";
+      if (/\btest\b/.test(String(props.dealname || "").toLowerCase())) continue;
+      const isRefund = stage === CONTRACT_EOI_REFUND_STAGE;
+      if (!isRefund && CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
+      const isSettlement = CONTRACT_UC_PIPELINES.includes(props.pipeline || "");
+      let eoiMs = NaN;
+      for (const sid of CONTRACT_EOI_STAGES) {
+        const t = parseT(props[`hs_v2_date_entered_${sid}`]);
+        if (!isNaN(t) && (isNaN(eoiMs) || t < eoiMs)) eoiMs = t;
+      }
+      if (!isNaN(eoiMs)) {
+        const bi = bucketOf(eoiMs);
+        if (bi >= 0) series.eois[bi]++;
+      }
+      const reachedUC = stage === CONTRACT_UC_STAGE || isSettlement;
+      if (reachedUC) {
+        let ucMs = parseT(props[`hs_v2_date_entered_${CONTRACT_UC_STAGE}`]);
+        if (isNaN(ucMs)) ucMs = parseT(props.closedate);
+        if (isNaN(ucMs)) ucMs = parseT(props.createdate);
+        const bi = bucketOf(ucMs);
+        if (bi >= 0) series.uc[bi]++;
+      }
+    }
+  })();
+
+  await Promise.all([meetingsP, membersP, contractsP]);
+
+  const rows = buckets.map((b, i) => {
+    const sitRate =
+      series.dsScheduled[i] > 0
+        ? Math.round((series.dsSat[i] / series.dsScheduled[i]) * 100)
+        : null;
+    const amEoiPct =
+      series.amSat[i] > 0
+        ? Math.round((series.amSatWithEoi[i] / series.amSat[i]) * 100)
+        : null;
+    return {
+      label: b.label,
+      monthIdx: b.monthIdx,
+      start: b.start,
+      end: b.end,
+      dsBooked: series.dsBooked[i],
+      dsScheduled: series.dsScheduled[i],
+      dsSat: series.dsSat[i],
+      sitRate,
+      members: series.members[i],
+      eois: series.eois[i],
+      uc: series.uc[i],
+      amSat: series.amSat[i],
+      amSatWithEoi: series.amSatWithEoi[i],
+      amEoiPct,
+    };
+  });
+
+  const sum = (k: keyof (typeof rows)[number]) =>
+    rows.reduce((s, r) => s + (Number(r[k]) || 0), 0);
+  const totalSat = sum("dsSat");
+  const totalSched = sum("dsScheduled");
+  const totalAm = sum("amSat");
+  const totalAmEoi = sum("amSatWithEoi");
+  const totals = {
+    dsBooked: sum("dsBooked"),
+    dsScheduled: totalSched,
+    dsSat: totalSat,
+    sitRate: totalSched > 0 ? Math.round((totalSat / totalSched) * 100) : null,
+    members: sum("members"),
+    eois: sum("eois"),
+    uc: sum("uc"),
+    amSat: totalAm,
+    amSatWithEoi: totalAmEoi,
+    amEoiPct: totalAm > 0 ? Math.round((totalAmEoi / totalAm) * 100) : null,
+  };
+
+  return { generatedAt: new Date().toISOString(), year, rows, totals };
+}
+
+// ===========================================================================
+// FORECASTING  —  upcoming DS + AM booked for the current month
+// ===========================================================================
+// Per Ben: how many Discovery Sessions and Acquisition Meetings are booked for
+// the REMAINDER of the current month (from now → end of month), plus the
+// FULL-MONTH total (already-held earlier this month + still-to-come). Bucketed
+// by the meeting's scheduled start_time (hs_meeting_start_time), in AEST.
+export async function forecast() {
+  const now = new Date();
+  const nowMs = now.getTime();
+  // Current Melbourne calendar month.
+  const melNow = new Date(nowMs + MEL_TZ_OFFSET_MS);
+  const y = melNow.getUTCFullYear();
+  const m = melNow.getUTCMonth();
+  const monthStartMs = Date.UTC(y, m, 1) - MEL_TZ_OFFSET_MS;
+  const monthEndMs = Date.UTC(y, m + 1, 1) - MEL_TZ_OFFSET_MS;
+  const monthStart = new Date(monthStartMs).toISOString();
+  const monthEnd = new Date(monthEndMs).toISOString();
+
+  const mtgProps = ["hs_meeting_title", "hs_meeting_start_time"];
+  const meetings = await hubspot.searchObjects(
+    "meetings",
+    {
+      filterGroups: [
+        {
+          filters: [
+            { propertyName: "hs_meeting_start_time", operator: "GTE", value: monthStart },
+            { propertyName: "hs_meeting_start_time", operator: "LT", value: monthEnd },
+          ],
+        },
+      ],
+      properties: mtgProps,
+      sorts: [{ propertyName: "hs_meeting_start_time", direction: "ASCENDING" }],
+    },
+    6000,
+  );
+  const title = (m: any) => (m.properties.hs_meeting_title || "");
+  const isDs = (m: any) => title(m).startsWith(DS_TITLE_PREFIX);
+  const isAm = (m: any) => title(m).startsWith(AM_TITLE_PREFIX);
+  const relevant = meetings.filter((mm: any) => isDs(mm) || isAm(mm));
+
+  // Dedupe by associated contact so a rescheduled session counts once.
+  const ids = relevant.map((mm: any) => mm.id);
+  const contactAssoc = ids.length
+    ? await hubspot.batchAssociations("meetings", "contacts", ids)
+    : ({} as Record<string, string[]>);
+
+  const clientFromTitle = (t: string, prefix: string): string => {
+    const afterColon = t.slice(prefix.length).replace(/^:\s*/, "");
+    const withIdx = afterColon.search(/\s+[Ww]ith\s+/);
+    return (withIdx >= 0 ? afterColon.slice(0, withIdx) : afterColon).trim() || "(unnamed)";
+  };
+
+  type Item = { client: string; date: string; kind: "DS" | "AM" };
+  const collect = (pred: (m: any) => boolean, prefix: string, kind: "DS" | "AM") => {
+    const seenFull = new Set<string>();
+    const seenRest = new Set<string>();
+    let full = 0;
+    let rest = 0;
+    const upcoming: Item[] = [];
+    // ascending by start_time already
+    for (const mm of relevant.filter(pred)) {
+      const t = +new Date(mm.properties.hs_meeting_start_time);
+      if (isNaN(t)) continue;
+      const cids = contactAssoc[mm.id] || [];
+      const key = cids.length ? `c:${cids.slice().sort()[0]}` : `m:${mm.id}`;
+      if (!seenFull.has(key)) {
+        seenFull.add(key);
+        full++;
+      }
+      if (t >= nowMs) {
+        if (!seenRest.has(key)) {
+          seenRest.add(key);
+          rest++;
+          upcoming.push({
+            client: clientFromTitle(title(mm), prefix),
+            date: mm.properties.hs_meeting_start_time,
+            kind,
+          });
+        }
+      }
+    }
+    return { full, rest, upcoming };
+  };
+
+  const ds = collect(isDs, DS_TITLE_PREFIX, "DS");
+  const am = collect(isAm, AM_TITLE_PREFIX, "AM");
+
+  const MONTHS = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+  ];
+  const upcoming = [...ds.upcoming, ...am.upcoming].sort((a, b) =>
+    a.date.localeCompare(b.date),
+  );
+
+  return {
+    generatedAt: new Date().toISOString(),
+    monthLabel: `${MONTHS[m]} ${y}`,
+    now: now.toISOString(),
+    monthStart,
+    monthEnd,
+    ds: { restOfMonth: ds.rest, fullMonth: ds.full },
+    am: { restOfMonth: am.rest, fullMonth: am.full },
+    upcoming,
   };
 }

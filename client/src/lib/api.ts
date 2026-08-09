@@ -253,6 +253,64 @@ export interface BusinessPerformance {
   totals: Record<string, number>;
 }
 
+// --- 2026 month-by-month report ---
+export interface Report2026Row {
+  label: string;
+  monthIdx: number;
+  start: string;
+  end: string;
+  dsBooked: number;
+  dsScheduled: number;
+  dsSat: number;
+  sitRate: number | null;
+  members: number;
+  eois: number;
+  uc: number;
+  amSat: number;
+  amSatWithEoi: number;
+  amEoiPct: number | null;
+}
+
+export interface Report2026 {
+  generatedAt: string;
+  cached?: boolean;
+  cacheAgeSec?: number;
+  year: number;
+  rows: Report2026Row[];
+  totals: {
+    dsBooked: number;
+    dsScheduled: number;
+    dsSat: number;
+    sitRate: number | null;
+    members: number;
+    eois: number;
+    uc: number;
+    amSat: number;
+    amSatWithEoi: number;
+    amEoiPct: number | null;
+  };
+}
+
+// --- Forecasting (current month) ---
+export interface ForecastItem {
+  client: string;
+  date: string;
+  kind: "DS" | "AM";
+}
+
+export interface Forecast {
+  generatedAt: string;
+  cached?: boolean;
+  cacheAgeSec?: number;
+  monthLabel: string;
+  now: string;
+  monthStart: string;
+  monthEnd: string;
+  ds: { restOfMonth: number; fullMonth: number };
+  am: { restOfMonth: number; fullMonth: number };
+  upcoming: ForecastItem[];
+}
+
 export interface MetaData {
   status: "ok" | "error" | "no_accounts";
   message?: string;

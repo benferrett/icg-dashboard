@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
-import { buildDashboard, businessPerformance } from "./icg/metrics";
+import { buildDashboard, businessPerformance, monthlyReport2026, forecast } from "./icg/metrics";
 import { parsePeriod, parseCustomRange } from "./icg/period";
 import { metaAds } from "./icg/meta";
 import {
@@ -153,6 +153,18 @@ async function warmCache() {
         console.error(`[warm] meta:${periodKey} failed:`, (e as any)?.message);
       }
     }
+    // Keep the 2026 month-by-month report warm (independent of period).
+    try {
+      await warmKey("report2026:2026", () => monthlyReport2026(2026));
+    } catch (e) {
+      console.error("[warm] report2026 failed:", (e as any)?.message);
+    }
+    // Keep the current-month forecast warm.
+    try {
+      await warmKey("forecast", () => forecast());
+    } catch (e) {
+      console.error("[warm] forecast failed:", (e as any)?.message);
+    }
     // Keep both business-performance granularities warm (independent of period).
     for (const g of ["week", "month"] as const) {
       try {
@@ -293,6 +305,33 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to build business performance" });
+    }
+  });
+
+  // 2026 month-by-month report (Jan–Dec 2026, calendar-month basis)
+  app.get("/api/report-2026", requireAuth, async (req, res) => {
+    try {
+      const force = req.query.refresh === "1";
+      const year = Number(req.query.year) || 2026;
+      const data = await cached(
+        `report2026:${year}`,
+        () => monthlyReport2026(year),
+        force,
+      );
+      res.json(data);
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to build 2026 report" });
+    }
+  });
+
+  // Forecasting (current-month DS + AM booked: rest-of-month + full-month)
+  app.get("/api/forecast", requireAuth, async (req, res) => {
+    try {
+      const force = req.query.refresh === "1";
+      const data = await cached("forecast", () => forecast(), force);
+      res.json(data);
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to build forecast" });
     }
   });
 

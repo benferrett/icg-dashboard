@@ -165,6 +165,12 @@ export function isBookingConsultant(id?: string | null): boolean {
 // Title-matching is required because many DS meetings lack an activity-type.
 export const DS_TITLE_PREFIX = "Inner Circle Group Discovery Session";
 
+// Portfolio Acquisition Meetings (member-side property meetings) are titled
+// "Inner Circle Portfolio Acquisition Meeting: <CLIENT> with <STRATEGIST> …" —
+// the same shape as a DS title. These are the meetings where a signed member
+// reviews property to buy; a booked/sat AM is the step that precedes an EOI.
+export const AM_TITLE_PREFIX = "Inner Circle Portfolio Acquisition Meeting";
+
 // A deal in any "DS Sat - …" stage means the prospect ATTENDED (sat) the discovery
 // session. We validate sat from the associated deal's stage rather than the raw
 // meeting outcome (the team leaves most held sessions as SCHEDULED, so the outcome

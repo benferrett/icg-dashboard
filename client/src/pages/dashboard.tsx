@@ -22,6 +22,8 @@ import {
   FileSignature,
   TrendingUp,
   GitCompareArrows,
+  CalendarRange,
+  CalendarClock,
   AlertTriangle,
   Moon,
   Sun,
@@ -35,6 +37,8 @@ import { StrategistsView } from "./views/StrategistsView";
 import { ContractsView } from "./views/ContractsView";
 import { BusinessPerformanceView } from "./views/BusinessPerformanceView";
 import { FunnelPerformanceView } from "./views/FunnelPerformanceView";
+import { Report2026View } from "./views/Report2026View";
+import { ForecastingView } from "./views/ForecastingView";
 
 type TabKey =
   | "overview"
@@ -43,7 +47,12 @@ type TabKey =
   | "consultants"
   | "strategists"
   | "contracts"
-  | "business";
+  | "business"
+  | "report2026"
+  | "forecasting";
+
+// Tabs that own their own data window and therefore have no date/range picker.
+const SELF_WINDOWED_TABS: TabKey[] = ["business", "report2026", "forecasting"];
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <LayoutDashboard className="h-4 w-4" /> },
@@ -57,6 +66,8 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "strategists", label: "Strategists", icon: <Target className="h-4 w-4" /> },
   { key: "contracts", label: "Contracts", icon: <FileSignature className="h-4 w-4" /> },
   { key: "business", label: "Business Performance", icon: <TrendingUp className="h-4 w-4" /> },
+  { key: "report2026", label: "2026 Reporting", icon: <CalendarRange className="h-4 w-4" /> },
+  { key: "forecasting", label: "Forecasting", icon: <CalendarClock className="h-4 w-4" /> },
 ];
 
 function useDarkMode() {
@@ -89,7 +100,7 @@ export default function DashboardPage({
   // Business is the only tab with no range control (it uses rolling trend
   // buckets), so a lingering custom range must be cleared when navigating to it.
   function goToTab(next: TabKey) {
-    if (next === "business" && custom) setCustom(null);
+    if (SELF_WINDOWED_TABS.includes(next) && custom) setCustom(null);
     setTab(next);
     setNavOpen(false);
   }
@@ -185,7 +196,7 @@ export default function DashboardPage({
         <div className="flex items-center gap-2">
           {/* Business has no selector (rolling trend buckets); every other tab
               — including Funnel — gets the hybrid presets + custom range picker. */}
-          {tab !== "business" && (
+          {!SELF_WINDOWED_TABS.includes(tab) && (
             <DateRangePicker
               preset={custom ? null : period}
               custom={custom}
@@ -257,7 +268,7 @@ export default function DashboardPage({
           <div className="flex items-center gap-2 mb-6">
             <span className="text-primary">{activeTab.icon}</span>
             <h1 className="text-lg font-semibold">{activeTab.label}</h1>
-            {tab !== "business" && (
+            {!SELF_WINDOWED_TABS.includes(tab) && (
               <span className="text-sm text-muted-foreground ml-2">
                 · {periodLabel}
               </span>
@@ -313,6 +324,8 @@ export default function DashboardPage({
             <ContractsView d={d} loading={loading} periodLabel={periodLabel} />
           )}
           {tab === "business" && <BusinessPerformanceView token={token} />}
+          {tab === "report2026" && <Report2026View token={token} />}
+          {tab === "forecasting" && <ForecastingView token={token} />}
 
           <footer className="text-center text-xs text-muted-foreground pt-8 pb-4">
             Live data from HubSpot &amp; Meta · cached up to 5 min · Inner Circle Group
