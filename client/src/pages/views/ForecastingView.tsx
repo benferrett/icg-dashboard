@@ -155,12 +155,13 @@ export function ForecastingView({ token }: { token: string }) {
                       <TableHead className="whitespace-nowrap">When (AEST)</TableHead>
                       <TableHead>Type</TableHead>
                       <TableHead>Client</TableHead>
+                      <TableHead>Strategist</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {upcoming.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={3} className="text-center text-muted-foreground py-8">
+                        <TableCell colSpan={4} className="text-center text-muted-foreground py-8">
                           No more sessions booked for the rest of the month.
                         </TableCell>
                       </TableRow>
@@ -183,6 +184,9 @@ export function ForecastingView({ token }: { token: string }) {
                             </span>
                           </TableCell>
                           <TableCell className="font-medium">{u.client}</TableCell>
+                          <TableCell className="text-muted-foreground">
+                            {u.strategist || "\u2014"}
+                          </TableCell>
                         </TableRow>
                       ))
                     )}

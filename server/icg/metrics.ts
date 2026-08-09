@@ -2926,7 +2926,20 @@ export async function forecast() {
     return (withIdx >= 0 ? afterColon.slice(0, withIdx) : afterColon).trim() || "(unnamed)";
   };
 
-  type Item = { client: string; date: string; kind: "DS" | "AM" };
+  // Strategist runs the session; title format is
+  // "<prefix>: <CLIENT> With <STRATEGIST> Via Zoom". Take the text between the
+  // " With " and a trailing " Via ..." (or end of string).
+  const strategistFromTitle = (t: string, prefix: string): string => {
+    const afterColon = t.slice(prefix.length).replace(/^:\s*/, "");
+    const withMatch = afterColon.match(/\s+[Ww]ith\s+/);
+    if (!withMatch || withMatch.index === undefined) return "";
+    let rest = afterColon.slice(withMatch.index + withMatch[0].length);
+    const viaIdx = rest.search(/\s+[Vv]ia\b/);
+    if (viaIdx >= 0) rest = rest.slice(0, viaIdx);
+    return rest.trim();
+  };
+
+  type Item = { client: string; strategist: string; date: string; kind: "DS" | "AM" };
   const collect = (pred: (m: any) => boolean, prefix: string, kind: "DS" | "AM") => {
     const seenFull = new Set<string>();
     const seenRest = new Set<string>();
@@ -2949,6 +2962,7 @@ export async function forecast() {
           rest++;
           upcoming.push({
             client: clientFromTitle(title(mm), prefix),
+            strategist: strategistFromTitle(title(mm), prefix),
             date: mm.properties.hs_meeting_start_time,
             kind,
           });

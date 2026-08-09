@@ -306,6 +306,7 @@ export interface Report2026 {
 // --- Forecasting (current month) ---
 export interface ForecastItem {
   client: string;
+  strategist: string;
   date: string;
   kind: "DS" | "AM";
 }
