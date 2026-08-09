@@ -224,6 +224,25 @@
  * need to be distinguished from eachother visually.
  */
 @layer utilities {
+  /* Excellent Consultant Scorecard traffic lights. These combine a semantic
+   * colour with a visible label in the tooltip, so the weekly review does not
+   * rely on colour alone. */
+  .scorecard-rag-green {
+    @apply bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300;
+  }
+
+  .scorecard-rag-amber {
+    @apply bg-amber-100 text-amber-900 dark:bg-amber-950/70 dark:text-amber-300;
+  }
+
+  .scorecard-rag-red {
+    @apply bg-red-100 text-red-800 dark:bg-red-950/70 dark:text-red-300;
+  }
+
+  .scorecard-rag-neutral {
+    @apply bg-muted text-muted-foreground;
+  }
+
   /* Hide ugly search cancel button in Chrome until we can style it properly */
   input[type='search']::-webkit-search-cancel-button {
     @apply hidden;
