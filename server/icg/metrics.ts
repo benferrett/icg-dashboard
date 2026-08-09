@@ -2476,15 +2476,40 @@ export async function monthlyReport2026(year = 2026) {
   const zeros = () => new Array(buckets.length).fill(0);
 
   const series = {
+    leads: zeros(),
     dsBooked: zeros(),
     dsScheduled: zeros(),
     dsSat: zeros(),
     members: zeros(),
     eois: zeros(),
+    eoiRefunds: zeros(),
     uc: zeros(),
     amSat: zeros(),
     amSatWithEoi: zeros(), // AM-sat clients this month who reached an EOI
   };
+
+  // Distinct EOI-buying clients per bucket (for the EOI multi-rate = EOIs per
+  // client who bought >=1). Populated in contractsP once contact associations
+  // are resolved. eoiClientsByBucket[bi] = Set<contactId>.
+  const eoiClientsByBucket: Set<string>[] = buckets.map(() => new Set<string>());
+
+  // ---- LEADS: contacts created that month (count-only per bucket) ----------
+  // Booking rate = DS Booked ÷ Leads, so we need the monthly lead volume.
+  const leadsP = (async () => {
+    const counts = await Promise.all(
+      buckets.map((b) =>
+        hubspot.countContacts([
+          {
+            filters: [
+              { propertyName: "createdate", operator: "GTE", value: b.start },
+              { propertyName: "createdate", operator: "LT", value: b.end },
+            ],
+          },
+        ]),
+      ),
+    );
+    counts.forEach((n, i) => (series.leads[i] = n));
+  })();
 
   const winStart = buckets[0].start;
   const winEnd = buckets[buckets.length - 1].end;
@@ -2699,6 +2724,8 @@ export async function monthlyReport2026(year = 2026) {
       },
       4000,
     );
+    // deal_id -> EOI bucket index, for resolving distinct EOI clients per month.
+    const eoiDealBucket: Record<string, number> = {};
     for (const d of deals) {
       const props = d.properties as any;
       const stage = props.dealstage || "";
@@ -2713,7 +2740,16 @@ export async function monthlyReport2026(year = 2026) {
       }
       if (!isNaN(eoiMs)) {
         const bi = bucketOf(eoiMs);
-        if (bi >= 0) series.eois[bi]++;
+        if (bi >= 0) {
+          series.eois[bi]++;
+          eoiDealBucket[String(d.id)] = bi;
+        }
+      }
+      // EOI refunds: bucket by when the deal ENTERED the EOI-cancelled stage.
+      if (isRefund) {
+        const rMs = parseT(props[CONTRACT_EOI_REFUND_ENTERED_PROP]);
+        const bi = bucketOf(rMs);
+        if (bi >= 0) series.eoiRefunds[bi]++;
       }
       const reachedUC = stage === CONTRACT_UC_STAGE || isSettlement;
       if (reachedUC) {
@@ -2724,9 +2760,30 @@ export async function monthlyReport2026(year = 2026) {
         if (bi >= 0) series.uc[bi]++;
       }
     }
+
+    // Resolve each EOI deal's client contact(s) so we can count DISTINCT
+    // EOI-buying clients per month (EOI multi-rate = EOIs / distinct clients).
+    const eoiDealIds = Object.keys(eoiDealBucket);
+    if (eoiDealIds.length) {
+      const assoc = await hubspot.batchAssociations("deals", "contacts", eoiDealIds);
+      for (const dealId of eoiDealIds) {
+        const bi = eoiDealBucket[dealId];
+        const contactIds = assoc[dealId] || [];
+        // A property deal maps to one client; if multiple contacts are
+        // associated, credit the FIRST (primary) so multiple EOIs for the same
+        // client collapse to one distinct client in that month.
+        if (contactIds.length) {
+          eoiClientsByBucket[bi].add(String(contactIds[0]));
+        } else {
+          // No contact association: treat the deal itself as its own client so
+          // it still contributes to the denominator (rate never < 1).
+          eoiClientsByBucket[bi].add(`deal:${dealId}`);
+        }
+      }
+    }
   })();
 
-  await Promise.all([meetingsP, membersP, contractsP]);
+  await Promise.all([leadsP, meetingsP, membersP, contractsP]);
 
   const rows = buckets.map((b, i) => {
     const sitRate =
@@ -2737,17 +2794,39 @@ export async function monthlyReport2026(year = 2026) {
       series.amSat[i] > 0
         ? Math.round((series.amSatWithEoi[i] / series.amSat[i]) * 100)
         : null;
+    // Booking rate = DS booked ÷ leads (created that month).
+    const bookingRate =
+      series.leads[i] > 0
+        ? Math.round((series.dsBooked[i] / series.leads[i]) * 100)
+        : null;
+    // Membership close rate = members ÷ DS sat (of what we actually saw).
+    const closeRate =
+      series.dsSat[i] > 0
+        ? Math.round((series.members[i] / series.dsSat[i]) * 100)
+        : null;
+    // EOI multi-rate = avg EOIs per client who bought >=1 EOI that month.
+    const eoiClients = eoiClientsByBucket[i].size;
+    const eoiMultiRate =
+      eoiClients > 0
+        ? Math.round((series.eois[i] / eoiClients) * 100) / 100
+        : null;
     return {
       label: b.label,
       monthIdx: b.monthIdx,
       start: b.start,
       end: b.end,
+      leads: series.leads[i],
       dsBooked: series.dsBooked[i],
+      bookingRate,
       dsScheduled: series.dsScheduled[i],
       dsSat: series.dsSat[i],
       sitRate,
       members: series.members[i],
+      closeRate,
       eois: series.eois[i],
+      eoiClients,
+      eoiMultiRate,
+      eoiRefunds: series.eoiRefunds[i],
       uc: series.uc[i],
       amSat: series.amSat[i],
       amSatWithEoi: series.amSatWithEoi[i],
@@ -2761,13 +2840,30 @@ export async function monthlyReport2026(year = 2026) {
   const totalSched = sum("dsScheduled");
   const totalAm = sum("amSat");
   const totalAmEoi = sum("amSatWithEoi");
+  const totalLeads = sum("leads");
+  const totalBooked = sum("dsBooked");
+  const totalMembers = sum("members");
+  const totalEois = sum("eois");
+  // Distinct EOI clients across the whole year (union of monthly sets).
+  const yearEoiClients = new Set<string>();
+  for (const s of eoiClientsByBucket) for (const c of s) yearEoiClients.add(c);
+  const totalEoiClients = yearEoiClients.size;
   const totals = {
-    dsBooked: sum("dsBooked"),
+    leads: totalLeads,
+    dsBooked: totalBooked,
+    bookingRate: totalLeads > 0 ? Math.round((totalBooked / totalLeads) * 100) : null,
     dsScheduled: totalSched,
     dsSat: totalSat,
     sitRate: totalSched > 0 ? Math.round((totalSat / totalSched) * 100) : null,
-    members: sum("members"),
-    eois: sum("eois"),
+    members: totalMembers,
+    closeRate: totalSat > 0 ? Math.round((totalMembers / totalSat) * 100) : null,
+    eois: totalEois,
+    eoiClients: totalEoiClients,
+    eoiMultiRate:
+      totalEoiClients > 0
+        ? Math.round((totalEois / totalEoiClients) * 100) / 100
+        : null,
+    eoiRefunds: sum("eoiRefunds"),
     uc: sum("uc"),
     amSat: totalAm,
     amSatWithEoi: totalAmEoi,

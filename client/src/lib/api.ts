@@ -259,12 +259,18 @@ export interface Report2026Row {
   monthIdx: number;
   start: string;
   end: string;
+  leads: number;
   dsBooked: number;
+  bookingRate: number | null;
   dsScheduled: number;
   dsSat: number;
   sitRate: number | null;
   members: number;
+  closeRate: number | null;
   eois: number;
+  eoiClients: number;
+  eoiMultiRate: number | null;
+  eoiRefunds: number;
   uc: number;
   amSat: number;
   amSatWithEoi: number;
@@ -278,12 +284,18 @@ export interface Report2026 {
   year: number;
   rows: Report2026Row[];
   totals: {
+    leads: number;
     dsBooked: number;
+    bookingRate: number | null;
     dsScheduled: number;
     dsSat: number;
     sitRate: number | null;
     members: number;
+    closeRate: number | null;
     eois: number;
+    eoiClients: number;
+    eoiMultiRate: number | null;
+    eoiRefunds: number;
     uc: number;
     amSat: number;
     amSatWithEoi: number;

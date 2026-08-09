@@ -29,16 +29,18 @@ import { ChartTooltip } from "./shared";
 // The count metrics that get a chart line + coloured table column. Rates
 // (sit rate, AM→EOI %) are shown as their own columns/cards, not chart lines.
 const METRIC_META: { key: keyof Report2026Row; label: string; color: string }[] = [
+  { key: "leads", label: "Leads", color: "hsl(217 91% 60%)" },
   { key: "dsBooked", label: "DS Booked", color: "hsl(38 92% 50%)" },
   { key: "dsScheduled", label: "DS Scheduled", color: "hsl(48 96% 53%)" },
   { key: "dsSat", label: "DS Sat", color: "hsl(160 84% 39%)" },
   { key: "members", label: "Members", color: "hsl(280 65% 60%)" },
   { key: "eois", label: "EOIs", color: "hsl(0 72% 55%)" },
   { key: "uc", label: "UC", color: "hsl(190 90% 42%)" },
-  { key: "amSat", label: "Acq. Meetings", color: "hsl(217 91% 60%)" },
+  { key: "amSat", label: "Acq. Meetings", color: "hsl(24 95% 53%)" },
 ];
 
 const pct = (v: number | null) => (v == null ? "\u2014" : `${v}%`);
+const mult = (v: number | null) => (v == null ? "\u2014" : `${v.toFixed(2)}\u00d7`);
 
 // 2026 Reporting: month-by-month (Jan–Dec 2026) on a calendar-month basis.
 // Sit rate = DS Sat ÷ DS Scheduled (same "what we actually saw" basis as
@@ -82,11 +84,16 @@ export function Report2026View({ token }: { token: string }) {
             icon={<TrendingUp className="h-4 w-4 text-primary" />}
           >
             <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-5 gap-3">
+              <Stat label="Leads" value={fmtNumber(t?.leads ?? 0)} testId="r26-total-leads" />
               <Stat label="DS Booked" value={fmtNumber(t?.dsBooked ?? 0)} testId="r26-total-dsBooked" />
+              <Stat label="Booking rate" value={pct(t?.bookingRate ?? null)} sub="booked / leads" testId="r26-total-bookingRate" />
               <Stat label="DS Sat" value={fmtNumber(t?.dsSat ?? 0)} sub={`of ${fmtNumber(t?.dsScheduled ?? 0)} scheduled`} testId="r26-total-dsSat" />
               <Stat label="Sit rate" value={pct(t?.sitRate ?? null)} sub="sat / scheduled" testId="r26-total-sitRate" />
               <Stat label="Members" value={fmtNumber(t?.members ?? 0)} testId="r26-total-members" />
+              <Stat label="Close rate" value={pct(t?.closeRate ?? null)} sub="members / sat" testId="r26-total-closeRate" />
               <Stat label="EOIs" value={fmtNumber(t?.eois ?? 0)} testId="r26-total-eois" />
+              <Stat label="EOI multi-rate" value={mult(t?.eoiMultiRate ?? null)} sub={`${fmtNumber(t?.eois ?? 0)} EOIs / ${fmtNumber(t?.eoiClients ?? 0)} clients`} testId="r26-total-eoiMultiRate" />
+              <Stat label="EOI refunds" value={fmtNumber(t?.eoiRefunds ?? 0)} testId="r26-total-eoiRefunds" />
               <Stat label="UC" value={fmtNumber(t?.uc ?? 0)} testId="r26-total-uc" />
               <Stat label="Acq. Meetings sat" value={fmtNumber(t?.amSat ?? 0)} testId="r26-total-amSat" />
               <Stat label="Acq. → bought EOI" value={pct(t?.amEoiPct ?? null)} sub={`${fmtNumber(t?.amSatWithEoi ?? 0)} of ${fmtNumber(t?.amSat ?? 0)}`} testId="r26-total-amEoiPct" />
@@ -144,12 +151,17 @@ export function Report2026View({ token }: { token: string }) {
                   <TableHeader>
                     <TableRow>
                       <TableHead className="whitespace-nowrap">Month</TableHead>
+                      <TableHead className="text-right">Leads</TableHead>
                       <TableHead className="text-right">DS Booked</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Booking rate</TableHead>
                       <TableHead className="text-right">DS Scheduled</TableHead>
                       <TableHead className="text-right">DS Sat</TableHead>
                       <TableHead className="text-right">Sit rate</TableHead>
                       <TableHead className="text-right">Members</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">Close rate</TableHead>
                       <TableHead className="text-right">EOIs</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">EOI multi-rate</TableHead>
+                      <TableHead className="text-right whitespace-nowrap">EOI refunds</TableHead>
                       <TableHead className="text-right">UC</TableHead>
                       <TableHead className="text-right">Acq. Mtgs</TableHead>
                       <TableHead className="text-right">Acq. → EOI</TableHead>
@@ -159,12 +171,24 @@ export function Report2026View({ token }: { token: string }) {
                     {rows.map((r, i) => (
                       <TableRow key={r.start} data-testid={`r26-row-${r.monthIdx}`}>
                         <TableCell className="font-medium whitespace-nowrap">{r.label}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtNumber(r.leads)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(r.dsBooked)}</TableCell>
+                        <TableCell className="text-right tabular-nums font-medium">{pct(r.bookingRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(r.dsScheduled)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(r.dsSat)}</TableCell>
                         <TableCell className="text-right tabular-nums font-medium">{pct(r.sitRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(r.members)}</TableCell>
+                        <TableCell className="text-right tabular-nums font-medium">{pct(r.closeRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(r.eois)}</TableCell>
+                        <TableCell className="text-right tabular-nums font-medium">
+                          {mult(r.eoiMultiRate)}
+                          {r.eoiClients > 0 && (
+                            <span className="ml-1 text-[10px] text-muted-foreground">
+                              ({r.eois}/{r.eoiClients})
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtNumber(r.eoiRefunds)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(r.uc)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(r.amSat)}</TableCell>
                         <TableCell className="text-right tabular-nums font-medium">
@@ -180,12 +204,17 @@ export function Report2026View({ token }: { token: string }) {
                     {t && (
                       <TableRow className="border-t-2 font-semibold">
                         <TableCell className="whitespace-nowrap">Total</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtNumber(t.leads)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(t.dsBooked)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{pct(t.bookingRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(t.dsScheduled)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(t.dsSat)}</TableCell>
                         <TableCell className="text-right tabular-nums">{pct(t.sitRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(t.members)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{pct(t.closeRate)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(t.eois)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{mult(t.eoiMultiRate)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{fmtNumber(t.eoiRefunds)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(t.uc)}</TableCell>
                         <TableCell className="text-right tabular-nums">{fmtNumber(t.amSat)}</TableCell>
                         <TableCell className="text-right tabular-nums">{pct(t.amEoiPct)}</TableCell>
@@ -199,10 +228,15 @@ export function Report2026View({ token }: { token: string }) {
 
           <p className="text-xs text-muted-foreground">
             Sit rate = DS sat ÷ DS scheduled to be held that month (same basis as
-            Overview). DS Booked counts sessions created that month; DS Sat and
-            Acquisition Meetings count sessions held that month. Acq. → EOI is the
-            share of clients who sat an acquisition meeting that month and reached
-            at least one EOI.
+            Overview). Booking rate = DS booked ÷ leads created that month. Close
+            rate = members ÷ DS sat. EOI multi-rate = EOIs ÷ distinct clients who
+            bought at least one EOI that month (avg properties per buyer). EOI
+            refunds count deals that entered the EOI-cancelled stage that month
+            (EOIs are reported gross, so a refund does not reduce the EOI count).
+            DS Booked counts sessions created that month; DS Sat and Acquisition
+            Meetings count sessions held that month. Acq. → EOI is the share of
+            clients who sat an acquisition meeting that month and reached at least
+            one EOI.
           </p>
         </>
       )}
