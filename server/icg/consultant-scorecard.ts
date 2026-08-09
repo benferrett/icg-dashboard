@@ -36,6 +36,11 @@ export interface ScorecardRow {
   dials: number;
   connected: number;
   connectRate: number | null;
+  totalTalkMs: number;
+  totalTalkMin: number;
+  avgTalkSec: number;
+  over3mCalls: number;
+  over3mPctOfConnected: number;
   spokeLeads: number;
   conversationRate: number | null;
   unanswered: number;
@@ -79,18 +84,60 @@ const ROSTER: Array<{ name: string; role: ScorecardRole; ownerIds: string[] }> =
   { name: "Steven Green", role: "Booker", ownerIds: ["362741341"] },
   { name: "Moses Emmanuel", role: "Booker", ownerIds: ["363808537", "363811156"] },
   { name: "Akhil Venugopal", role: "Booker", ownerIds: ["362495114"] },
-  { name: "Ben Ferrett", role: "Strategist", ownerIds: ["82710130"] },
+  { name: "Ben Ferrett", role: "Strategist", ownerIds: ["361455466"] },
   { name: "Renee O'Connell", role: "Strategist", ownerIds: ["363222039"] },
   { name: "Patrick Van Orsouw", role: "Strategist", ownerIds: ["362352488"] },
   { name: "Steven Mau", role: "Strategist", ownerIds: ["361919740", "361919911"] },
 ];
 
-const ownerToConsultant = new Map(
-  ROSTER.flatMap((person) => person.ownerIds.map((id) => [id, person.name] as const)),
-);
-const rosterNamesByLength = ROSTER.map((person) => person.name).sort(
-  (a, b) => b.length - a.length,
-);
+// HubSpot call disposition UUIDs — DO NOT change these strings.
+export const CALL_DISPOSITION = {
+  CONNECTED: "f240bbac-87c9-4f6e-bf70-924b57d47db7",
+  NO_ANSWER: "73a0d17f-1163-4015-bdd5-ec830791da20",
+  BUSY: "9d9162e7-6cf3-4944-bf63-4dff82258764",
+  VOICEMAIL: "b2cf5968-551e-4856-9783-52b3da59a7d0",
+} as const;
+
+// Unanswered dials that are eligible for a double-tap follow-up. Wrong
+// numbers are deliberately excluded because they should not be redialled.
+export const UNANSWERED_DISPOSITIONS: readonly string[] = [
+  CALL_DISPOSITION.NO_ANSWER,
+  CALL_DISPOSITION.BUSY,
+  CALL_DISPOSITION.VOICEMAIL,
+];
+
+export const OWNER_MAP: Record<string, string> = {
+  "361919911": "Steven Mau",
+  "363811156": "Moses Emmanuel",
+  "362352488": "Patrick Van Orsouw",
+  "362741341": "Steven Green",
+  "362495114": "Akhil Venugopal",
+  "363222039": "Renee O'Connell",
+  "361455466": "Ben Ferrett",
+  "364595873": "Jean-Jerome Vacher",
+  // Existing legacy owners remain supported.
+  "363808537": "Moses Emmanuel",
+  "361919740": "Steven Mau",
+  // 82710130 is the legacy/admin owner — do NOT map to a consultant.
+};
+
+const AIRCALL_LINE_RE = /call<\/span><\/strong>\s+on\s+<strong>([^<]+)<\/strong>/;
+const AIRCALL_MADE_BY_RE = /made by\s+<strong>([^<]+)<\/strong>/;
+
+const AIRCALL_LINE_MAP: Record<string, string> = {
+  moses: "Moses Emmanuel",
+  "steven green": "Steven Green",
+  "steve green": "Steven Green",
+  akhil: "Akhil Venugopal",
+  "ben ferrett": "Ben Ferrett",
+  patrick: "Patrick Van Orsouw",
+  renee: "Renee O'Connell",
+  "steve mau": "Steven Mau",
+  "steven mau": "Steven Mau",
+  jean: "Jean-Jerome Vacher",
+};
+
+const ownerToConsultant = new Map(Object.entries(OWNER_MAP));
 
 const MINUTE_MS = 60 * 1000;
 const DOUBLE_TAP_WINDOW_MS = 2 * MINUTE_MS;
@@ -141,49 +188,56 @@ function isSms(props: Props): boolean {
   return channel === "sms" || channel.includes("text message") || channel.includes("sms");
 }
 
-function dispositionText(props: Props): string {
-  return normalized(props.hs_call_disposition || props.hs_call_status);
+export function isConnected(call: { hs_call_disposition?: string | null }): boolean {
+  return call.hs_call_disposition === CALL_DISPOSITION.CONNECTED;
 }
 
-function isNotConnected(props: Props): boolean {
-  const disposition = dispositionText(props);
-  // This supports labelled custom dispositions and is defensive against raw
-  // HubSpot option IDs: a zero-duration call is treated as unanswered when a
-  // labelled value is unavailable.
-  if (
-    /no.?answer|busy|voice.?mail|wrong.?number|not.?connected|unanswered|failed/.test(
-      disposition,
-    )
-  ) {
-    return true;
+export function isUnanswered(call: { hs_call_disposition?: string | null }): boolean {
+  return (
+    !!call.hs_call_disposition &&
+    UNANSWERED_DISPOSITIONS.includes(call.hs_call_disposition)
+  );
+}
+
+function normaliseLine(raw: string | undefined | null): string | null {
+  if (!raw) return null;
+  let line = raw.trim().toLowerCase();
+  const parts = line.split(/\s+/);
+  if (parts.length > 1 && /^\d+$/.test(parts[parts.length - 1])) {
+    line = parts.slice(0, -1).join(" ");
   }
-  if (/connected|answered|completed/.test(disposition)) return false;
-  const duration = Number(props.hs_call_duration || 0);
-  return !Number.isFinite(duration) || duration <= 0;
+  for (const [key, consultant] of Object.entries(AIRCALL_LINE_MAP)) {
+    if (line.includes(key)) return consultant;
+  }
+  return null;
 }
 
-function isConnected(props: Props): boolean {
-  return !isNotConnected(props);
-}
+export function resolveConsultant(call: {
+  hubspot_owner_id?: string | null;
+  hs_call_body?: string | null;
+}): string {
+  const ownerId = call.hubspot_owner_id ? String(call.hubspot_owner_id) : null;
+  if (ownerId && OWNER_MAP[ownerId]) return OWNER_MAP[ownerId];
 
-// Aircall activity can be stored with an integration/service owner instead of
-// the booker. The call body is the reliable fallback. Matching roster names is
-// deliberately more robust than relying on an exact copy format from Aircall.
-function consultantFromAircallBody(props: Props): string | undefined {
-  const body = `${props.hs_call_body || ""} ${props.hs_call_title || ""}`
-    .replace(/<[^>]+>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .toLowerCase();
-  if (!/aircall|call/.test(body)) return undefined;
-  return rosterNamesByLength.find((name) => body.includes(name.toLowerCase()));
+  const body = call.hs_call_body || "";
+  const lineMatch = body.match(AIRCALL_LINE_RE);
+  if (lineMatch) {
+    const consultant = normaliseLine(lineMatch[1]);
+    if (consultant) return consultant;
+  }
+  const madeByMatch = body.match(AIRCALL_MADE_BY_RE);
+  if (madeByMatch) {
+    const consultant = normaliseLine(madeByMatch[1]);
+    if (consultant) return consultant;
+  }
+  return "Unassigned";
 }
 
 function consultantForActivity(props: Props, fallbackOwnerId?: string): string | undefined {
-  return (
-    ownerToConsultant.get(props.hubspot_owner_id || "") ||
-    consultantFromAircallBody(props) ||
-    ownerToConsultant.get(fallbackOwnerId || "")
-  );
+  const consultant = resolveConsultant(props);
+  return consultant === "Unassigned"
+    ? ownerToConsultant.get(fallbackOwnerId || "")
+    : consultant;
 }
 
 function sourceIsEligible(source?: string): boolean {
@@ -211,6 +265,15 @@ function percent(numerator: number, denominator: number): number | null {
 
 function average(numerator: number, denominator: number): number | null {
   return denominator ? numerator / denominator : null;
+}
+
+function round1(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
+function callDurationMs(value?: string): number {
+  const duration = Number(value);
+  return Number.isFinite(duration) && duration > 0 ? duration : 0;
 }
 
 function rateRag(value: number | null, green: number, amber: number): RAG {
@@ -241,6 +304,8 @@ interface OutboundActivity {
   at: number;
   consultant?: string;
   connected?: boolean;
+  unanswered?: boolean;
+  durationMs?: number;
 }
 
 interface LeadActivity {
@@ -379,6 +444,8 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
         at,
         consultant: consultantForActivity(props, contact.properties.hubspot_owner_id),
         connected: isConnected(props),
+        unanswered: isUnanswered(props),
+        durationMs: callDurationMs(props.hs_call_duration),
       });
     }
     for (const communicationId of communicationAssociations[contact.id] || []) {
@@ -417,7 +484,7 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
     const spokeContactIds = new Set(
       periodCallEvents.filter((event) => event.call.connected).map((event) => event.contactId),
     );
-    const unansweredEvents = periodCallEvents.filter((event) => !event.call.connected);
+    const unansweredEvents = periodCallEvents.filter((event) => event.call.unanswered);
 
     // Double tap: after each unanswered outbound call, inspect the complete
     // outbound call sequence for that contact. The follow-up may be logged by a
@@ -498,7 +565,20 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
       .map((activity) => makeLead(activity, [], []).firstTouchMins)
       .filter((value): value is number => value != null);
     const dials = periodCallEvents.length;
-    const connected = periodCallEvents.filter((event) => event.call.connected).length;
+    const connectedEvents = periodCallEvents.filter((event) => event.call.connected);
+    const connected = connectedEvents.length;
+    const totalTalkMs = connectedEvents.reduce(
+      (total, event) => total + (event.call.durationMs || 0),
+      0,
+    );
+    const totalTalkMin = round1(totalTalkMs / MINUTE_MS);
+    const avgTalkSec = connected ? round1(totalTalkMs / connected / 1000) : 0;
+    const over3mCalls = connectedEvents.filter(
+      (event) => (event.call.durationMs || 0) >= 180_000,
+    ).length;
+    const over3mPctOfConnected = connected
+      ? round1((over3mCalls / connected) * 100)
+      : 0;
     const workedLeads = workedContactIds.size;
     const unanswered = unansweredEvents.length;
     const doubleTaps = doubleTappedInitialIds.size;
@@ -517,6 +597,11 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
       dials,
       connected,
       connectRate,
+      totalTalkMs,
+      totalTalkMin,
+      avgTalkSec,
+      over3mCalls,
+      over3mPctOfConnected,
       spokeLeads: spokeContactIds.size,
       conversationRate,
       unanswered,
