@@ -102,6 +102,7 @@ export interface Dashboard {
     scheduleds: { client: string; date: string }[];
     sats: { client: string; date: string }[];
   }[];
+  consultantScorecard: ConsultantScorecard;
   strategists: {
     name: string;
     assigned: number;
@@ -131,6 +132,67 @@ export interface Dashboard {
     byPipeline: { name: string; count: number; value: number }[];
     monthly: { month: string; value: number }[];
   };
+}
+
+export type ScorecardRole = "Booker" | "Strategist";
+export type ScorecardRAG = "green" | "amber" | "red" | "neutral";
+
+export interface ScorecardLead {
+  id: string;
+  name: string;
+  email: string;
+  owner: string;
+  createdAt: string;
+  source: string;
+  dials: number;
+  sms: number;
+  firstTouchMins: number | null;
+  lastOutboundAt: string | null;
+  reason?: string;
+}
+
+export interface ScorecardRow {
+  name: string;
+  role: ScorecardRole;
+  ownedLeads: number;
+  workedLeads: number;
+  dials: number;
+  connected: number;
+  connectRate: number | null;
+  spokeLeads: number;
+  conversationRate: number | null;
+  unanswered: number;
+  doubleTaps: number;
+  doubleTapRate: number | null;
+  dialsPerLead: number | null;
+  sms: number;
+  smsPerLead: number | null;
+  medianFirstTouchMins: number | null;
+  zeroTouch: number;
+  underWorked0Sms: number;
+  underWorked1Sms: number;
+  underWorked2Sms: number;
+  underWorked3PlusSms: number;
+  slowTouch: number;
+  missedDoubleTaps: number;
+  rag: Record<string, ScorecardRAG>;
+  drilldowns: {
+    zeroTouch: ScorecardLead[];
+    underWorked: {
+      zero: ScorecardLead[];
+      one: ScorecardLead[];
+      two: ScorecardLead[];
+      threePlus: ScorecardLead[];
+    };
+    slowTouch: ScorecardLead[];
+    missedDoubleTaps: ScorecardLead[];
+  };
+}
+
+export interface ConsultantScorecard {
+  ok: true;
+  sourceNote: string;
+  rows: ScorecardRow[];
 }
 
 export interface ContractStep {

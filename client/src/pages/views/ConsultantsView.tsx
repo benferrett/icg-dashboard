@@ -5,6 +5,7 @@ import { Stat } from "@/components/dashboard/Stat";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
+import { ConsultantScorecardView } from "@/components/dashboard/ConsultantScorecard";
 import {
   Table,
   TableBody,
@@ -109,6 +110,13 @@ export function ConsultantsView({
           </>
         )}
       </div>
+
+      {/* Weekly outreach coaching scorecard — deliberately placed above the
+          existing consultant drill-downs so it frames the review without
+          changing the established DS-booking, show-up, or talk-time views. */}
+      {!loading && d?.consultantScorecard && (
+        <ConsultantScorecardView scorecard={d.consultantScorecard} />
+      )}
 
       {/* Performance table */}
       <Section

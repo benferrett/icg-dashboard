@@ -1,6 +1,7 @@
 // Aggregation logic that turns raw HubSpot deals into the dashboard's four sections.
 import { hubspot } from "./hubspot";
 import { PeriodRange, parsePeriod, buildBuckets, Granularity } from "./period";
+import { consultantScorecard } from "./consultant-scorecard";
 import {
   ownerName,
   pipelineName,
@@ -2373,7 +2374,7 @@ export async function buildDashboard(period?: string | PeriodRange) {
     if (row.eoi) eoiByStrategist[row.name] = row.eoi;
     if (row.uc) ucByStrategist[row.name] = row.uc;
   }
-  const [consultants, strategists] = await Promise.all([
+  const [consultants, strategists, scorecard] = await Promise.all([
     consultantTeam(
       range,
       bookedByConsultant,
@@ -2395,6 +2396,7 @@ export async function buildDashboard(period?: string | PeriodRange) {
       eoiByStrategist,
       ucByStrategist,
     ),
+    consultantScorecard(range),
   ]);
 
   return {
@@ -2412,6 +2414,7 @@ export async function buildDashboard(period?: string | PeriodRange) {
     salesFunnel: funnel,
     consultants,
     strategists,
+    consultantScorecard: scorecard,
     memberships: members,
     contracts: contractData,
     financial: fin,
