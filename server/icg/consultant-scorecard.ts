@@ -31,6 +31,7 @@ export interface ScorecardLead {
 export interface ScorecardRow {
   name: string;
   role: ScorecardRole;
+  allocatedLeads: number;
   ownedLeads: number;
   workedLeads: number;
   dials: number;
@@ -601,6 +602,7 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
     return {
       name: person.name,
       role: person.role,
+      allocatedLeads: ownedActivities.length,
       ownedLeads: ownedActivities.length,
       workedLeads,
       dials,

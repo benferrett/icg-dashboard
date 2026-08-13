@@ -286,6 +286,20 @@ function HeroCard({ row, onOpen }: { row: ScorecardRow; onOpen: (state: Drilldow
           <div className="mt-1 text-sm text-muted-foreground">median first touch</div>
         </div>
       </div>
+      <div className="grid gap-3 border-t pt-3">
+        <div className="flex items-baseline justify-between gap-3">
+          <div className="text-sm text-muted-foreground">Leads allocated</div>
+          <div className="text-2xl font-semibold tabular-nums">
+            {row.allocatedLeads.toLocaleString()}
+          </div>
+        </div>
+        <div className="flex items-baseline justify-between gap-3">
+          <div className="text-sm text-muted-foreground">Calls ≥ 3 min</div>
+          <div className="text-2xl font-semibold tabular-nums">
+            {row.over3mCalls.toLocaleString()}
+          </div>
+        </div>
+      </div>
       <div className="grid grid-cols-3 gap-2 border-t pt-3">
         <Button variant="outline" size="sm" className="h-8 text-xs" onClick={() => {
           const lead = row.drilldowns.zeroTouch;
