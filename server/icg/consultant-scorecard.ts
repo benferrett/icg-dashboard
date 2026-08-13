@@ -77,13 +77,20 @@ export interface ConsultantScorecard {
   rows: ScorecardRow[];
 }
 
-// The roster deliberately mirrors the weekly review cohort. Booker and
-// strategist rows are both shown, but the RAG legend is aimed at bookers;
-// strategist outreach figures are contextual only.
+export const SCORECARD_ROSTER: readonly string[] = [
+  "Moses Emmanuel",
+  "Akhil Venugopal",
+  "Steven Green",
+  "Mitchell Saxton",
+];
+
+// The full attribution roster supports the contact query; returned scorecard
+// rows are limited to SCORECARD_ROSTER below.
 const ROSTER: Array<{ name: string; role: ScorecardRole; ownerIds: string[] }> = [
   { name: "Steven Green", role: "Booker", ownerIds: ["362741341"] },
   { name: "Moses Emmanuel", role: "Booker", ownerIds: ["363808537", "363811156"] },
   { name: "Akhil Venugopal", role: "Booker", ownerIds: ["362495114"] },
+  { name: "Mitchell Saxton", role: "Booker", ownerIds: [] },
   { name: "Ben Ferrett", role: "Strategist", ownerIds: ["361455466"] },
   { name: "Renee O'Connell", role: "Strategist", ownerIds: ["363222039"] },
   { name: "Patrick Van Orsouw", role: "Strategist", ownerIds: ["362352488"] },
@@ -129,6 +136,8 @@ const AIRCALL_LINE_MAP: Record<string, string> = {
   "steven green": "Steven Green",
   "steve green": "Steven Green",
   akhil: "Akhil Venugopal",
+  mitchell: "Mitchell Saxton",
+  mitch: "Mitchell Saxton",
   "ben ferrett": "Ben Ferrett",
   patrick: "Patrick Van Orsouw",
   renee: "Renee O'Connell",
@@ -643,7 +652,12 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
         ),
       },
     };
-  });
+  })
+    .filter((row) => SCORECARD_ROSTER.includes(row.name))
+    .sort(
+      (a, b) =>
+        SCORECARD_ROSTER.indexOf(a.name) - SCORECARD_ROSTER.indexOf(b.name),
+    );
 
   return {
     ok: true,
