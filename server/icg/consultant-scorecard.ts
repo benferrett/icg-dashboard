@@ -36,6 +36,7 @@ export interface ScorecardRow {
   workedLeads: number;
   dials: number;
   connected: number;
+  connectedCalls: number;
   connectRate: number | null;
   totalTalkMs: number;
   totalTalkMin: number;
@@ -49,6 +50,7 @@ export interface ScorecardRow {
   doubleTapRate: number | null;
   dialsPerLead: number | null;
   sms: number;
+  smsCount: number;
   smsPerLead: number | null;
   medianFirstTouchMins: number | null;
   zeroTouch: number;
@@ -198,6 +200,15 @@ function isSms(props: Props): boolean {
   return channel === "sms" || channel.includes("text message") || channel.includes("sms");
 }
 
+function isOutboundSmsActivity(props: Props): boolean {
+  const direction = normalized(
+    props.hs_communication_direction || props.hs_direction || props.direction,
+  );
+  // HubSpot can omit direction on an agent-created SMS. Treat that as outbound
+  // unless it is explicitly marked inbound; attribution is resolved separately.
+  return !direction || direction.includes("outbound") || direction.includes("outgoing");
+}
+
 export function isConnected(call: { hs_call_disposition?: string | null }): boolean {
   return call.hs_call_disposition === CALL_DISPOSITION.CONNECTED;
 }
@@ -318,6 +329,10 @@ interface OutboundActivity {
   durationMs?: number;
 }
 
+interface AttributedActivity extends OutboundActivity {
+  contactIds: string[];
+}
+
 interface LeadActivity {
   contact: HubSpotObject;
   owner: string | undefined;
@@ -358,44 +373,108 @@ function makeLead(
 }
 
 /**
- * Builds the weekly coaching scorecard from contacts created in the selected
- * range and their associated call/SMS activities. Every HubSpot lookup uses the
+ * Builds the weekly coaching scorecard. Lead buckets are based on contacts
+ * created in the selected range, while consultant activity totals are based on
+ * the timestamp of the calls and SMS themselves. Every HubSpot lookup uses the
  * existing read-through client, so normal snapshot + SQLite response caching
  * still applies and this module never creates a second data store.
  */
 export async function consultantScorecard(range: PeriodRange): Promise<ConsultantScorecard> {
-  const contacts = (await hubspot.searchObjects(
-    "contacts",
-    {
-      filterGroups: [
-        {
-          filters: [
-            { propertyName: "createdate", operator: "GTE", value: range.start },
-            { propertyName: "createdate", operator: "LT", value: range.end },
-            {
-              propertyName: "hubspot_owner_id",
-              operator: "IN",
-              values: ROSTER.flatMap((person) => person.ownerIds),
-            },
-          ],
-        },
-      ],
-      properties: [
-        "firstname",
-        "lastname",
-        "email",
-        "createdate",
-        "hubspot_owner_id",
-        "lead_source",
-      ],
-      sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
-    },
-    20000,
-  )) as HubSpotObject[];
+  const [contacts, inWindowCalls, inWindowSms] = await Promise.all([
+    hubspot.searchObjects(
+      "contacts",
+      {
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: "createdate", operator: "GTE", value: range.start },
+              { propertyName: "createdate", operator: "LT", value: range.end },
+              {
+                propertyName: "hubspot_owner_id",
+                operator: "IN",
+                values: ROSTER.flatMap((person) => person.ownerIds),
+              },
+            ],
+          },
+        ],
+        properties: [
+          "firstname",
+          "lastname",
+          "email",
+          "createdate",
+          "hubspot_owner_id",
+          "lead_source",
+        ],
+        sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
+      },
+      20000,
+    ) as Promise<HubSpotObject[]>,
+    // Activity totals must start from activity timestamps: the previous
+    // contact-association path only saw calls/SMS on contacts created in the
+    // window, dropping follow-up activity against older leads.
+    hubspot.searchObjects(
+      "calls",
+      {
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: "hs_timestamp", operator: "GTE", value: range.start },
+              { propertyName: "hs_timestamp", operator: "LT", value: range.end },
+              { propertyName: "hs_call_direction", operator: "EQ", value: "OUTBOUND" },
+            ],
+          },
+        ],
+        properties: [
+          "hs_call_duration",
+          "hs_call_disposition",
+          "hubspot_owner_id",
+          "hs_timestamp",
+          "hs_call_body",
+          "hs_call_direction",
+        ],
+        sorts: [{ propertyName: "hs_timestamp", direction: "ASCENDING" }],
+      },
+      20000,
+    ) as Promise<HubSpotObject[]>,
+    hubspot.searchObjects(
+      "communications",
+      {
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: "hs_timestamp", operator: "GTE", value: range.start },
+              { propertyName: "hs_timestamp", operator: "LT", value: range.end },
+              {
+                propertyName: "hs_communication_channel_type",
+                operator: "EQ",
+                value: "SMS",
+              },
+            ],
+          },
+        ],
+        properties: [
+          "hs_timestamp",
+          "hubspot_owner_id",
+          "hs_communication_direction",
+          "hs_communication_channel_type",
+          "hs_communication_body",
+        ],
+        sorts: [{ propertyName: "hs_timestamp", direction: "ASCENDING" }],
+      },
+      20000,
+    ) as Promise<HubSpotObject[]>,
+  ]);
 
   const contactIds = contacts.map((contact) => contact.id);
   const emptyAssociations: Record<string, string[]> = {};
-  const [callAssociations, communicationAssociations] = await Promise.all([
+  const inWindowCallIds = inWindowCalls.map((call) => call.id);
+  const inWindowSmsIds = inWindowSms.map((sms) => sms.id);
+  const [
+    callAssociations,
+    communicationAssociations,
+    inWindowCallContactAssociations,
+    inWindowSmsContactAssociations,
+  ] = await Promise.all([
     contactIds.length
       ? hubspot.batchAssociations("contacts", "calls", contactIds)
       : Promise.resolve(emptyAssociations),
@@ -404,6 +483,12 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
     // the rest of the scorecard to remain useful without direct API calls.
     contactIds.length
       ? hubspot.batchAssociations("contacts", "communications", contactIds)
+      : Promise.resolve(emptyAssociations),
+    inWindowCallIds.length
+      ? hubspot.batchAssociations("calls", "contacts", inWindowCallIds)
+      : Promise.resolve(emptyAssociations),
+    inWindowSmsIds.length
+      ? hubspot.batchAssociations("communications", "contacts", inWindowSmsIds)
       : Promise.resolve(emptyAssociations),
   ]);
 
@@ -472,29 +557,101 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
     activities.set(contact.id, { contact, owner, calls, sms });
   }
 
+  const timestampedCalls: AttributedActivity[] = inWindowCalls.flatMap((call) => {
+    const props = call.properties;
+    const at = asTime(props.hs_timestamp);
+    if (at == null || !isOutbound(props, "call")) return [];
+    return [{
+      id: call.id,
+      at,
+      consultant: consultantForActivity(props),
+      connected: isConnected(props),
+      unanswered: isUnanswered(props),
+      durationMs: callDurationMs(props.hs_call_duration),
+      contactIds: inWindowCallContactAssociations[call.id] || [],
+    }];
+  });
+  const timestampedSms: AttributedActivity[] = inWindowSms.flatMap((sms) => {
+    const props = sms.properties;
+    const at = asTime(props.hs_timestamp);
+    if (at == null || !isSms(props) || !isOutboundSmsActivity(props)) return [];
+    return [{
+      id: sms.id,
+      at,
+      consultant: consultantForActivity({
+        ...props,
+        hs_call_body: props.hs_call_body || props.hs_communication_body,
+      }),
+      contactIds: inWindowSmsContactAssociations[sms.id] || [],
+    }];
+  });
+
+  const timestampedCallsByContact = new Map<string, AttributedActivity[]>();
+  const timestampedSmsByContact = new Map<string, AttributedActivity[]>();
+  for (const call of timestampedCalls) {
+    for (const contactId of call.contactIds) {
+      const calls = timestampedCallsByContact.get(contactId) || [];
+      calls.push(call);
+      timestampedCallsByContact.set(contactId, calls);
+    }
+  }
+  for (const sms of timestampedSms) {
+    for (const contactId of sms.contactIds) {
+      const messages = timestampedSmsByContact.get(contactId) || [];
+      messages.push(sms);
+      timestampedSmsByContact.set(contactId, messages);
+    }
+  }
+
+  const contactsNeedingMissedDoubleTapDrilldown = new Set<string>();
+  for (const call of timestampedCalls.filter((item) => item.unanswered)) {
+    for (const contactId of call.contactIds) {
+      const hasFollowUp = (timestampedCallsByContact.get(contactId) || []).some(
+        (candidate) =>
+          candidate.at > call.at && candidate.at - call.at <= DOUBLE_TAP_WINDOW_MS,
+      );
+      if (!hasFollowUp) contactsNeedingMissedDoubleTapDrilldown.add(contactId);
+    }
+  }
+  const timestampedContactProps = contactsNeedingMissedDoubleTapDrilldown.size
+    ? await hubspot.batchRead(
+        "contacts",
+        Array.from(contactsNeedingMissedDoubleTapDrilldown),
+        ["firstname", "lastname", "email", "createdate", "hubspot_owner_id", "lead_source"],
+      )
+    : {};
+  const timestampedContactActivities = new Map<string, LeadActivity>();
+  for (const [contactId, props] of Object.entries(timestampedContactProps)) {
+    if (activities.has(contactId)) continue;
+    timestampedContactActivities.set(contactId, {
+      contact: { id: contactId, properties: props },
+      owner: ownerToConsultant.get(props.hubspot_owner_id || ""),
+      calls: timestampedCallsByContact.get(contactId) || [],
+      sms: timestampedSmsByContact.get(contactId) || [],
+    });
+  }
+
   const rows: ScorecardRow[] = ROSTER.map((person) => {
     const ownedActivities = Array.from(activities.values()).filter(
       (activity) => activity.owner === person.name,
     );
-    const periodCallEvents = ownedActivities.flatMap((activity) =>
-      activity.calls
-        .filter((call) => isInRange(call.at, range) && call.consultant === person.name)
-        .map((call) => ({ contactId: activity.contact.id, call })),
+    const periodCallEvents = timestampedCalls.filter(
+      (call) => call.consultant === person.name,
     );
-    const periodSmsEvents = ownedActivities.flatMap((activity) =>
-      activity.sms
-        .filter((sms) => isInRange(sms.at, range) && sms.consultant === person.name)
-        .map((sms) => ({ contactId: activity.contact.id, sms })),
+    const periodSmsEvents = timestampedSms.filter(
+      (sms) => sms.consultant === person.name,
     );
 
     const workedContactIds = new Set([
-      ...periodCallEvents.map((event) => event.contactId),
-      ...periodSmsEvents.map((event) => event.contactId),
+      ...periodCallEvents.flatMap((call) => call.contactIds),
+      ...periodSmsEvents.flatMap((sms) => sms.contactIds),
     ]);
     const spokeContactIds = new Set(
-      periodCallEvents.filter((event) => event.call.connected).map((event) => event.contactId),
+      periodCallEvents
+        .filter((call) => call.connected)
+        .flatMap((call) => call.contactIds),
     );
-    const unansweredEvents = periodCallEvents.filter((event) => event.call.unanswered);
+    const unansweredEvents = periodCallEvents.filter((call) => call.unanswered);
 
     // Double tap: after each unanswered outbound call, inspect the complete
     // outbound call sequence for that contact. The follow-up may be logged by a
@@ -502,16 +659,18 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
     // genuinely called again inside the two-minute window.
     const doubleTappedInitialIds = new Set<string>();
     const missedDoubleTapContacts = new Map<string, OutboundActivity>();
-    for (const { contactId, call } of unansweredEvents) {
-      const allOutboundCalls = activities.get(contactId)?.calls || [];
-      const hasFollowUp = allOutboundCalls.some(
-        (candidate) =>
-          candidate.at > call.at && candidate.at - call.at <= DOUBLE_TAP_WINDOW_MS,
-      );
-      if (hasFollowUp) doubleTappedInitialIds.add(call.id);
-      else {
-        const previous = missedDoubleTapContacts.get(contactId);
-        if (!previous || call.at > previous.at) missedDoubleTapContacts.set(contactId, call);
+    for (const call of unansweredEvents) {
+      for (const contactId of call.contactIds) {
+        const allOutboundCalls = timestampedCallsByContact.get(contactId) || [];
+        const hasFollowUp = allOutboundCalls.some(
+          (candidate) =>
+            candidate.at > call.at && candidate.at - call.at <= DOUBLE_TAP_WINDOW_MS,
+        );
+        if (hasFollowUp) doubleTappedInitialIds.add(call.id);
+        else {
+          const previous = missedDoubleTapContacts.get(contactId);
+          if (!previous || call.at > previous.at) missedDoubleTapContacts.set(contactId, call);
+        }
       }
     }
 
@@ -559,15 +718,17 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
       }
     }
 
-    const missedDoubleTaps = Array.from(missedDoubleTapContacts.entries()).map(
+    const missedDoubleTaps: ScorecardLead[] = Array.from(missedDoubleTapContacts.entries()).flatMap(
       ([contactId, call]) => {
-        const activity = activities.get(contactId)!;
+        const activity =
+          activities.get(contactId) || timestampedContactActivities.get(contactId);
+        if (!activity) return [];
         const calls = activity.calls.filter((candidate) => isInRange(candidate.at, range));
         const sms = activity.sms.filter((candidate) => isInRange(candidate.at, range));
-        return {
+        return [{
           ...makeLead(activity, calls, sms),
           reason: `Unanswered outbound call at ${new Date(call.at).toISOString()} was not redialled within 2 min`,
-        };
+        }];
       },
     );
 
@@ -575,16 +736,16 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
       .map((activity) => makeLead(activity, [], []).firstTouchMins)
       .filter((value): value is number => value != null);
     const dials = periodCallEvents.length;
-    const connectedEvents = periodCallEvents.filter((event) => event.call.connected);
+    const connectedEvents = periodCallEvents.filter((call) => call.connected);
     const connected = connectedEvents.length;
     const totalTalkMs = connectedEvents.reduce(
-      (total, event) => total + (event.call.durationMs || 0),
+      (total, call) => total + (call.durationMs || 0),
       0,
     );
     const totalTalkMin = round1(totalTalkMs / MINUTE_MS);
     const avgTalkSec = connected ? round1(totalTalkMs / connected / 1000) : 0;
     const over3mCalls = connectedEvents.filter(
-      (event) => (event.call.durationMs || 0) >= 180_000,
+      (call) => (call.durationMs || 0) >= 180_000,
     ).length;
     const over3mPctOfConnected = connected
       ? round1((over3mCalls / connected) * 100)
@@ -607,6 +768,7 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
       workedLeads,
       dials,
       connected,
+      connectedCalls: connected,
       connectRate,
       totalTalkMs,
       totalTalkMin,
@@ -620,6 +782,7 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
       doubleTapRate,
       dialsPerLead,
       sms: periodSmsEvents.length,
+      smsCount: periodSmsEvents.length,
       smsPerLead,
       medianFirstTouchMins,
       zeroTouch: zeroTouch.length,
@@ -664,7 +827,7 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
   return {
     ok: true,
     sourceNote:
-      "Contacts created in the selected period; calls/SMS are HubSpot activities associated to those contacts.",
+      "Activity totals use HubSpot calls/SMS timestamped in the selected period; lead buckets remain based on contacts created in that period.",
     rows,
   };
 }

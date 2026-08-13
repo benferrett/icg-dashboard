@@ -159,7 +159,11 @@ export interface ScorecardRow {
   workedLeads: number;
   dials: number;
   connected: number;
+  connectedCalls: number;
   connectRate: number | null;
+  totalTalkMs: number;
+  totalTalkMin: number;
+  avgTalkSec: number;
   over3mCalls: number;
   spokeLeads: number;
   conversationRate: number | null;
@@ -168,6 +172,7 @@ export interface ScorecardRow {
   doubleTapRate: number | null;
   dialsPerLead: number | null;
   sms: number;
+  smsCount: number;
   smsPerLead: number | null;
   medianFirstTouchMins: number | null;
   zeroTouch: number;
