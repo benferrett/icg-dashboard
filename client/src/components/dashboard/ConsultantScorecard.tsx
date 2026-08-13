@@ -89,16 +89,20 @@ function RAGValue({
   children,
   rag,
   className = "",
+  hero = false,
 }: {
   children: React.ReactNode;
   rag?: ScorecardRAG;
   className?: string;
+  hero?: boolean;
 }) {
   return (
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className={`inline-flex min-w-12 justify-center rounded px-1.5 py-0.5 text-xs font-semibold tabular-nums ${ragClass(
+          className={`inline-flex min-w-12 justify-center rounded font-semibold tabular-nums ${
+            hero ? "px-2.5 py-1 text-sm" : "px-1.5 py-0.5 text-xs"
+          } ${ragClass(
             rag,
           )} ${className}`}
         >
@@ -248,38 +252,38 @@ function HeroCard({ row, onOpen }: { row: ScorecardRow; onOpen: (state: Drilldow
   const underWorked =
     row.underWorked0Sms + row.underWorked1Sms + row.underWorked2Sms + row.underWorked3PlusSms;
   return (
-    <Card className="min-w-[280px] p-4 flex flex-col gap-4" data-testid={`scorecard-hero-${row.name}`}>
+    <Card className="flex min-h-[400px] flex-col gap-6 p-8" data-testid={`scorecard-hero-${row.name}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="font-semibold">{row.name}</h3>
-          <p className="text-xs text-muted-foreground">{row.role} · weekly coaching view</p>
+          <h3 className="text-lg font-semibold">{row.name}</h3>
+          <p className="text-sm text-muted-foreground">{row.role} · weekly coaching view</p>
         </div>
-        <RAGValue rag={row.rag.doubleTapRate}>{rate(row.doubleTapRate)} DT</RAGValue>
+        <RAGValue rag={row.rag.doubleTapRate} hero>{rate(row.doubleTapRate)} DT</RAGValue>
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-3 gap-4">
         <div>
-          <div className="text-lg font-semibold tabular-nums">{fmtNumber(row.dials)}</div>
-          <div className="text-xs text-muted-foreground">dials</div>
+          <div className="text-5xl font-semibold tabular-nums">{fmtNumber(row.dials)}</div>
+          <div className="text-sm text-muted-foreground">dials</div>
         </div>
         <div>
-          <RAGValue rag={row.rag.connectRate}>{rate(row.connectRate)}</RAGValue>
-          <div className="mt-1 text-xs text-muted-foreground">connect</div>
+          <RAGValue rag={row.rag.connectRate} hero>{rate(row.connectRate)}</RAGValue>
+          <div className="mt-1 text-sm text-muted-foreground">connect</div>
         </div>
         <div>
-          <RAGValue rag={row.rag.conversationRate}>{rate(row.conversationRate)}</RAGValue>
-          <div className="mt-1 text-xs text-muted-foreground">conversation</div>
+          <RAGValue rag={row.rag.conversationRate} hero>{rate(row.conversationRate)}</RAGValue>
+          <div className="mt-1 text-sm text-muted-foreground">conversation</div>
         </div>
         <div>
-          <RAGValue rag={row.rag.dialsPerLead}>{row.dialsPerLead?.toFixed(1) ?? "—"}</RAGValue>
-          <div className="mt-1 text-xs text-muted-foreground">dials/lead</div>
+          <RAGValue rag={row.rag.dialsPerLead} hero>{row.dialsPerLead?.toFixed(1) ?? "—"}</RAGValue>
+          <div className="mt-1 text-sm text-muted-foreground">dials/lead</div>
         </div>
         <div>
-          <RAGValue rag={row.rag.smsPerLead}>{row.smsPerLead?.toFixed(1) ?? "—"}</RAGValue>
-          <div className="mt-1 text-xs text-muted-foreground">SMS/lead</div>
+          <RAGValue rag={row.rag.smsPerLead} hero>{row.smsPerLead?.toFixed(1) ?? "—"}</RAGValue>
+          <div className="mt-1 text-sm text-muted-foreground">SMS/lead</div>
         </div>
         <div>
-          <RAGValue rag={row.rag.firstTouch}>{minutes(row.medianFirstTouchMins)}</RAGValue>
-          <div className="mt-1 text-xs text-muted-foreground">median first touch</div>
+          <RAGValue rag={row.rag.firstTouch} hero>{minutes(row.medianFirstTouchMins)}</RAGValue>
+          <div className="mt-1 text-sm text-muted-foreground">median first touch</div>
         </div>
       </div>
       <div className="grid grid-cols-3 gap-2 border-t pt-3">
@@ -358,7 +362,7 @@ export function ConsultantScorecardView({ scorecard }: { scorecard?: ConsultantS
           </Tooltip>
         </div>
 
-        <div className="flex gap-3 overflow-x-auto pb-1">
+        <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {scorecard.rows.map((row) => (
             <HeroCard key={row.name} row={row} onOpen={setDrilldown} />
           ))}
