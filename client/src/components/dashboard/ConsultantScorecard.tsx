@@ -255,14 +255,14 @@ function HeroCard({ row, onOpen }: { row: ScorecardRow; onOpen: (state: Drilldow
     <Card className="flex min-h-[400px] flex-col gap-6 p-8" data-testid={`scorecard-hero-${row.name}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-lg font-semibold">{row.name}</h3>
+          <h3 className="text-2xl font-semibold">{row.name}</h3>
           <p className="text-sm text-muted-foreground">{row.role} · weekly coaching view</p>
         </div>
         <RAGValue rag={row.rag.doubleTapRate} hero>{rate(row.doubleTapRate)} DT</RAGValue>
       </div>
       <div className="grid grid-cols-3 gap-4">
         <div>
-          <div className="text-5xl font-semibold tabular-nums">{fmtNumber(row.dials)}</div>
+          <div className="text-5xl font-bold tabular-nums">{fmtNumber(row.dials)}</div>
           <div className="text-sm text-muted-foreground">dials</div>
         </div>
         <div>
@@ -362,7 +362,7 @@ export function ConsultantScorecardView({ scorecard }: { scorecard?: ConsultantS
           </Tooltip>
         </div>
 
-        <div className="grid w-full grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           {scorecard.rows.map((row) => (
             <HeroCard key={row.name} row={row} onOpen={setDrilldown} />
           ))}
