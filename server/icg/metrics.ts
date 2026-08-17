@@ -1,5 +1,6 @@
 // Aggregation logic that turns raw HubSpot deals into the dashboard's four sections.
 import { hubspot } from "./hubspot";
+import { metaAdInsights, MetaAdRow } from "./meta";
 import { PeriodRange, parsePeriod, buildBuckets, Granularity } from "./period";
 import { consultantScorecard } from "./consultant-scorecard";
 import {
@@ -170,7 +171,10 @@ async function marketing(range: PeriodRange) {
   // "DS booked" (which counts DS meetings CREATED in the window, including ones
   // for leads generated earlier) — this answers "of the leads we generated this
   // period, what % have we booked in?".
-  const leadBooking = await leadBookingByChannel(range);
+  const [leadBooking, perAd] = await Promise.all([
+    leadBookingByChannel(range),
+    perAdBreakdown(range),
+  ]);
 
   return {
     newLeads7: last7,
@@ -182,6 +186,7 @@ async function marketing(range: PeriodRange) {
     trend,
     sampleSize: recent.length,
     leadBooking,
+    perAd,
   };
 }
 
@@ -253,6 +258,122 @@ async function leadBookingByChannel(
     return { ok: true, meta: rate(meta), embr: rate(embr), total: rate(total) };
   } catch (err) {
     return { ok: false, meta: zero(), embr: zero(), total: zero() };
+  }
+}
+
+// ---- PER-AD BREAKDOWN (Meta) ----------------------------------------------
+// Bookings and members per individual Meta ad, grouped by funnel Layer.
+//
+// Attribution basis (per Ben): FIRST-TOUCH ad of the client, cohort = leads
+// CREATED in the selected period. For every HubSpot contact created in the
+// window we read `hs_analytics_first_url`, parse the Facebook `hsa_ad` ad ID
+// out of it, and check the contact's associated deals for (a) a DS-booking
+// stage and (b) a membership-SOLD stage. We then join those tallies to the
+// live Meta ad-level insights (ad name, campaign->layer, spend, Meta leads).
+//
+// Ad IDs present in HubSpot but not returned by Meta insights for the period
+// (e.g. paused ads with historical leads) still appear, labelled by their ID.
+
+const HSA_AD_RE = /[?&]hsa_ad=(\d+)/i;
+
+export type PerAdRow = {
+  adId: string;
+  adName: string;
+  campaignName: string;
+  layer: number | null;
+  spend: number; // Meta-reported spend in the period
+  metaLeads: number; // Meta-reported lead-form submissions
+  hsLeads: number; // HubSpot contacts created in period whose first-touch ad = this ad
+  bookings: number; // of those, how many booked a DS
+  members: number; // of those, how many bought a membership
+};
+
+async function perAdBreakdown(
+  range: PeriodRange,
+): Promise<{ ok: boolean; rows: PerAdRow[]; currency: string; message?: string }> {
+  try {
+    // 1. Meta ad-level insights (names, layer, spend, leads) for the period.
+    const metaRes = await metaAdInsights(range);
+    const metaByAd = new Map<string, MetaAdRow>();
+    for (const a of metaRes.ads) metaByAd.set(a.adId, a);
+
+    // 2. HubSpot contacts created in the period, with their first-touch URL.
+    //    We only care about Meta (PAID_SOCIAL) contacts — those carry hsa_ad.
+    const contacts = await hubspot.searchObjects(
+      "contacts",
+      {
+        filterGroups: [
+          {
+            filters: [
+              { propertyName: "createdate", operator: "GTE", value: range.start },
+              { propertyName: "createdate", operator: "LT", value: range.end },
+              { propertyName: "hs_analytics_source", operator: "EQ", value: "PAID_SOCIAL" },
+            ],
+          },
+        ],
+        properties: ["hs_analytics_first_url"],
+      },
+      6000,
+    );
+
+    // contactId -> ad ID (first-touch), keeping only contacts we can attribute.
+    const adOfContact: Record<string, string> = {};
+    for (const c of contacts) {
+      const url = c.properties.hs_analytics_first_url || "";
+      const m = HSA_AD_RE.exec(url);
+      if (m) adOfContact[c.id] = m[1];
+    }
+    const ids = Object.keys(adOfContact);
+
+    // 3. Associated deals per contact + their stages, so we can flag DS-booked
+    //    and membership-sold contacts.
+    const assoc = await hubspot.batchAssociations("contacts", "deals", ids);
+    const allDeals = Array.from(new Set(Object.values(assoc).flat()));
+    const dealProps = await hubspot.batchRead("deals", allDeals, ["dealstage"]);
+    const memberSold = new Set<string>(MEMBERSHIP_SOLD_STAGES);
+
+    // 4. Tally leads / bookings / members per ad ID.
+    type Tally = { hsLeads: number; bookings: number; members: number };
+    const tally: Record<string, Tally> = {};
+    const bump = (adId: string): Tally =>
+      (tally[adId] ||= { hsLeads: 0, bookings: 0, members: 0 });
+    for (const id of ids) {
+      const adId = adOfContact[id];
+      const t = bump(adId);
+      t.hsLeads++;
+      const stages = (assoc[id] || []).map((d) => dealProps[d]?.dealstage || "");
+      if (stages.some((s) => DS_BOOKING_STAGES.has(s))) t.bookings++;
+      if (stages.some((s) => memberSold.has(s))) t.members++;
+    }
+
+    // 5. Merge Meta insight rows with the HubSpot tallies. Union of ad IDs.
+    const allAdIds = new Set<string>([...metaByAd.keys(), ...Object.keys(tally)]);
+    const rows: PerAdRow[] = [];
+    for (const adId of allAdIds) {
+      const m = metaByAd.get(adId);
+      const t = tally[adId] || { hsLeads: 0, bookings: 0, members: 0 };
+      rows.push({
+        adId,
+        adName: m?.adName || `Ad ${adId}`,
+        campaignName: m?.campaignName || "",
+        layer: m?.layer ?? null,
+        spend: m?.spend ?? 0,
+        metaLeads: m?.leads ?? 0,
+        hsLeads: t.hsLeads,
+        bookings: t.bookings,
+        members: t.members,
+      });
+    }
+    // Sort by layer (asc, nulls last) then spend desc.
+    rows.sort((a, b) => {
+      const la = a.layer ?? 99;
+      const lb = b.layer ?? 99;
+      if (la !== lb) return la - lb;
+      return b.spend - a.spend;
+    });
+    return { ok: metaRes.ok, rows, currency: metaRes.currency, message: metaRes.message };
+  } catch (err: any) {
+    return { ok: false, rows: [], currency: "AUD", message: err?.message || "per-ad failed" };
   }
 }
 

@@ -74,6 +74,24 @@ export interface Dashboard {
       embr: { leads: number; booked: number; bookRate: number };
       total: { leads: number; booked: number; bookRate: number };
     };
+    // Per individual Meta ad, grouped by funnel Layer. Bookings/members are
+    // first-touch attributed to the ad; leads cohort = created in the period.
+    perAd: {
+      ok: boolean;
+      currency: string;
+      message?: string;
+      rows: {
+        adId: string;
+        adName: string;
+        campaignName: string;
+        layer: number | null;
+        spend: number;
+        metaLeads: number;
+        hsLeads: number;
+        bookings: number;
+        members: number;
+      }[];
+    };
   };
   embr: {
     cpl: number;

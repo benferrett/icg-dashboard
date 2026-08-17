@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { Dashboard, MetaData, FunnelWindow } from "@/lib/api";
 import {
   fmtCurrency,
@@ -447,6 +447,170 @@ export function MarketingView({
               </div>
             </div>
           </Card>
+        )}
+      </Section>
+
+      {/* PER-AD BREAKDOWN — bookings & members per individual Meta ad, by Layer */}
+      <Section
+        title={`Bookings & members per ad · ${periodLabel.toLowerCase()}`}
+        icon={<Layers className="h-4 w-4 text-primary" />}
+      >
+        <p className="text-xs text-muted-foreground mb-3 -mt-1">
+          Each Meta ad grouped by funnel Layer. Spend &amp; Meta leads come live
+          from the Meta Ads API; bookings and members are first-touch attributed
+          to the ad (of the leads created this period, how many booked a DS or
+          bought a membership).
+        </p>
+        {loading || !d ? (
+          <Skeleton className="h-48 w-full" />
+        ) : !d.marketing.perAd || d.marketing.perAd.rows.length === 0 ? (
+          <Card className="p-4 border-amber-500/40 flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-500 shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <div className="font-medium">Per-ad data unavailable</div>
+              <div className="text-muted-foreground">
+                {d.marketing.perAd?.message ||
+                  "No Meta ad activity found for this period."}
+              </div>
+            </div>
+          </Card>
+        ) : (
+          (() => {
+            const rows = d.marketing.perAd.rows;
+            // Group rows by layer (nulls -> "Other"), preserving sort order.
+            const groups = new Map<string, typeof rows>();
+            for (const r of rows) {
+              const key = r.layer == null ? "Other" : `Layer ${r.layer}`;
+              if (!groups.has(key)) groups.set(key, []);
+              groups.get(key)!.push(r);
+            }
+            const cpx = (spend: number, n: number) =>
+              n > 0 ? fmtCurrency(spend / n) : "—";
+            const grand = rows.reduce(
+              (a, r) => {
+                a.spend += r.spend;
+                a.metaLeads += r.metaLeads;
+                a.hsLeads += r.hsLeads;
+                a.bookings += r.bookings;
+                a.members += r.members;
+                return a;
+              },
+              { spend: 0, metaLeads: 0, hsLeads: 0, bookings: 0, members: 0 },
+            );
+            return (
+              <Card className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Ad</TableHead>
+                      <TableHead className="text-right">Spend</TableHead>
+                      <TableHead className="text-right">Meta leads</TableHead>
+                      <TableHead className="text-right">Bookings</TableHead>
+                      <TableHead className="text-right">Members</TableHead>
+                      <TableHead className="text-right">Cost / booking</TableHead>
+                      <TableHead className="text-right">Cost / member</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {Array.from(groups.entries()).map(([layer, gr]) => {
+                      const sub = gr.reduce(
+                        (a, r) => {
+                          a.spend += r.spend;
+                          a.metaLeads += r.metaLeads;
+                          a.bookings += r.bookings;
+                          a.members += r.members;
+                          return a;
+                        },
+                        { spend: 0, metaLeads: 0, bookings: 0, members: 0 },
+                      );
+                      return (
+                        <Fragment key={layer}>
+                          <TableRow className="bg-muted/40">
+                            <TableCell
+                              colSpan={7}
+                              className="text-xs font-semibold uppercase tracking-wide text-muted-foreground py-2"
+                            >
+                              {layer}
+                              {gr[0]?.campaignName ? ` · ${gr[0].campaignName}` : ""}
+                            </TableCell>
+                          </TableRow>
+                          {gr.map((r) => (
+                            <TableRow key={r.adId} data-testid={`perad-${r.adId}`}>
+                              <TableCell className="font-medium max-w-[240px] truncate">
+                                {r.adName}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {fmtCurrency(r.spend)}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {fmtNumber(r.metaLeads)}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums font-medium">
+                                {fmtNumber(r.bookings)}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums font-medium text-primary">
+                                {fmtNumber(r.members)}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums text-muted-foreground">
+                                {cpx(r.spend, r.bookings)}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums text-muted-foreground">
+                                {cpx(r.spend, r.members)}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                          <TableRow className="border-t border-border/60">
+                            <TableCell className="text-xs font-semibold">
+                              {layer} subtotal
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-semibold">
+                              {fmtCurrency(sub.spend)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-semibold">
+                              {fmtNumber(sub.metaLeads)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-semibold">
+                              {fmtNumber(sub.bookings)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-semibold text-primary">
+                              {fmtNumber(sub.members)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-semibold text-muted-foreground">
+                              {cpx(sub.spend, sub.bookings)}
+                            </TableCell>
+                            <TableCell className="text-right tabular-nums font-semibold text-muted-foreground">
+                              {cpx(sub.spend, sub.members)}
+                            </TableCell>
+                          </TableRow>
+                        </Fragment>
+                      );
+                    })}
+                    <TableRow className="border-t-2 border-border bg-muted/30">
+                      <TableCell className="font-semibold">All ads</TableCell>
+                      <TableCell className="text-right tabular-nums font-semibold">
+                        {fmtCurrency(grand.spend)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-semibold">
+                        {fmtNumber(grand.metaLeads)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-semibold">
+                        {fmtNumber(grand.bookings)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-semibold text-primary">
+                        {fmtNumber(grand.members)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-semibold text-muted-foreground">
+                        {cpx(grand.spend, grand.bookings)}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums font-semibold text-muted-foreground">
+                        {cpx(grand.spend, grand.members)}
+                      </TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </Card>
+            );
+          })()
         )}
       </Section>
 
