@@ -347,10 +347,13 @@ async function perAdBreakdown(
     }
 
     // 5. Merge Meta insight rows with the HubSpot tallies. Union of ad IDs.
+    //    Layer 1 is the audience-builder / awareness layer (no direct lead gen),
+    //    so it is excluded from the per-ad bookings/members breakdown per Ben.
     const allAdIds = new Set<string>([...metaByAd.keys(), ...Object.keys(tally)]);
     const rows: PerAdRow[] = [];
     for (const adId of allAdIds) {
       const m = metaByAd.get(adId);
+      if ((m?.layer ?? null) === 1) continue; // skip Layer 1 (audience builder)
       const t = tally[adId] || { hsLeads: 0, bookings: 0, members: 0 };
       rows.push({
         adId,
