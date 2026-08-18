@@ -172,11 +172,13 @@ export interface ScorecardLead {
 export interface ScorecardRow {
   name: string;
   role: ScorecardRole;
+  allocatedLeads: number;
   ownedLeads: number;
   workedLeads: number;
   dials: number;
   connected: number;
   connectRate: number | null;
+  over3mCalls: number;
   spokeLeads: number;
   conversationRate: number | null;
   unanswered: number;
