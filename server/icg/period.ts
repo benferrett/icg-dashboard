@@ -161,6 +161,34 @@ const MONTH_ABBR = [
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
+// The month-series for Business Performance is anchored to a fixed start month
+// (Jan 2026 = ICG's FY/reporting baseline) rather than trailing N months, so the
+// chart always reads Jan 2026 → current month. Change these to move the anchor.
+export const BIZPERF_MONTH_ANCHOR_YEAR = 2026;
+export const BIZPERF_MONTH_ANCHOR_MONTH = 0; // 0 = January
+
+// Build contiguous month buckets from the fixed anchor (Jan 2026) through the
+// CURRENT (in-progress) month, oldest-first. Melbourne-local month boundaries.
+export function buildMonthBucketsFromAnchor(
+  anchorYear = BIZPERF_MONTH_ANCHOR_YEAR,
+  anchorMonth = BIZPERF_MONTH_ANCHOR_MONTH,
+): Bucket[] {
+  const nowMel = new Date(Date.now() + MEL_OFFSET_MS);
+  const curY = nowMel.getUTCFullYear();
+  const curM = nowMel.getUTCMonth();
+  const monthsSpan = (curY - anchorYear) * 12 + (curM - anchorMonth) + 1;
+  const count = Math.max(1, monthsSpan);
+  const buckets: Bucket[] = [];
+  for (let i = 0; i < count; i++) {
+    const startMs = melMidnightUtc(anchorYear, anchorMonth + i, 1);
+    const endMs = melMidnightUtc(anchorYear, anchorMonth + i + 1, 1);
+    const sd = new Date(startMs + MEL_OFFSET_MS);
+    const label = `${MONTH_ABBR[sd.getUTCMonth()]} ${String(sd.getUTCFullYear()).slice(2)}`;
+    buckets.push({ label, start: iso(startMs), end: iso(endMs) });
+  }
+  return buckets;
+}
+
 // Build the trailing `count` buckets ending with the CURRENT (in-progress)
 // week/month. Boundaries are Melbourne-local midnights converted to UTC.
 export function buildBuckets(granularity: Granularity, count = 12): Bucket[] {

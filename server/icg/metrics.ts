@@ -1,7 +1,13 @@
 // Aggregation logic that turns raw HubSpot deals into the dashboard's four sections.
 import { hubspot } from "./hubspot";
 import { metaAdInsights, MetaAdRow } from "./meta";
-import { PeriodRange, parsePeriod, buildBuckets, Granularity } from "./period";
+import {
+  PeriodRange,
+  parsePeriod,
+  buildBuckets,
+  buildMonthBucketsFromAnchor,
+  Granularity,
+} from "./period";
 import { consultantScorecard } from "./consultant-scorecard";
 import {
   ownerName,
@@ -2108,7 +2114,10 @@ async function financial() {
 // dashboard while staying fast.
 export async function businessPerformance(granularityRaw?: string) {
   const granularity: Granularity = granularityRaw === "month" ? "month" : "week";
-  const buckets = buildBuckets(granularity, 12);
+  // Month view is anchored to Jan 2026 (ICG reporting baseline) and grows each
+  // month; week view stays a trailing 12-week window.
+  const buckets =
+    granularity === "month" ? buildMonthBucketsFromAnchor() : buildBuckets(granularity, 12);
   const winStart = buckets[0].start;
   const winEnd = buckets[buckets.length - 1].end;
   const winStartMs = +new Date(winStart);
@@ -2137,16 +2146,27 @@ export async function businessPerformance(granularityRaw?: string) {
     uc: zeros(),
   };
 
-  // ---- LEADS: contacts by createdate ---------------------------------------
-  // Contacts are high-volume (thousands/yr), so fetching every record and
-  // day-slicing a 12-month window blows past the gateway timeout. We only need
-  // per-bucket COUNTS, so run one cheap count-only search per bucket instead.
+  // ---- LEADS: META + EMBR contacts by createdate ---------------------------
+  // ICG has exactly two real lead channels, so Business Performance counts a
+  // contact as a lead ONLY if it is a Meta lead (hs_analytics_source =
+  // PAID_SOCIAL) OR an EMBR lead (lead_source = EMBR). Organic / direct /
+  // referral / offline contacts are deliberately excluded. countContacts OR's
+  // its filterGroups and HubSpot de-dupes across groups, so a contact that is
+  // both PAID_SOCIAL and EMBR is still counted once.
   const leadsP = (async () => {
     const counts = await Promise.all(
       buckets.map((b) =>
         hubspot.countContacts([
           {
             filters: [
+              { propertyName: "hs_analytics_source", operator: "EQ", value: "PAID_SOCIAL" },
+              { propertyName: "createdate", operator: "GTE", value: b.start },
+              { propertyName: "createdate", operator: "LT", value: b.end },
+            ],
+          },
+          {
+            filters: [
+              { propertyName: "lead_source", operator: "EQ", value: "EMBR" },
               { propertyName: "createdate", operator: "GTE", value: b.start },
               { propertyName: "createdate", operator: "LT", value: b.end },
             ],

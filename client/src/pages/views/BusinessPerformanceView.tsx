@@ -63,6 +63,12 @@ export function BusinessPerformanceView({ token }: { token: string }) {
   const data = q.data;
   const rows = data?.rows ?? [];
   const unit = granularity === "week" ? "week" : "month";
+  // Week view is a trailing 12-week window; month view is anchored to Jan 2026
+  // and grows each month, so describe the range from the actual bucket count.
+  const rangeLabel =
+    granularity === "month"
+      ? `Since Jan 2026 · ${rows.length} month${rows.length === 1 ? "" : "s"}`
+      : `Last ${rows.length || 12} weeks`;
 
   return (
     <div className="flex flex-col gap-8">
@@ -85,7 +91,7 @@ export function BusinessPerformanceView({ token }: { token: string }) {
           ))}
         </div>
         <span className="text-xs text-muted-foreground">
-          Last 12 {unit}s{" "}
+          {rangeLabel}{" "}
           {data ? `· updated ${timeAgo(data.generatedAt)}` : "· loading…"}
         </span>
       </div>
@@ -96,7 +102,7 @@ export function BusinessPerformanceView({ token }: { token: string }) {
         <>
           {/* 12-unit totals */}
           <Section
-            title={`Last 12 ${unit}s · totals`}
+            title={`${rangeLabel.replace(/ · updated.*/, "")} · totals`}
             icon={<TrendingUp className="h-4 w-4 text-primary" />}
           >
             <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
