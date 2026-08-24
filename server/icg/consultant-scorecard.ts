@@ -93,7 +93,7 @@ const ROSTER: Array<{ name: string; role: ScorecardRole; ownerIds: string[] }> =
   { name: "Steven Green", role: "Booker", ownerIds: ["362741341"] },
   { name: "Moses Emmanuel", role: "Booker", ownerIds: ["363808537", "363811156"] },
   { name: "Akhil Venugopal", role: "Booker", ownerIds: ["362495114"] },
-  { name: "Mitchell Saxton", role: "Booker", ownerIds: [] },
+  { name: "Mitchell Saxton", role: "Booker", ownerIds: ["366721097"] },
   { name: "Ben Ferrett", role: "Strategist", ownerIds: ["361455466"] },
   { name: "Renee O'Connell", role: "Strategist", ownerIds: ["363222039"] },
   { name: "Patrick Van Orsouw", role: "Strategist", ownerIds: ["362352488"] },
@@ -128,6 +128,7 @@ export const OWNER_MAP: Record<string, string> = {
   // Existing legacy owners remain supported.
   "363808537": "Moses Emmanuel",
   "361919740": "Steven Mau",
+  "366721097": "Mitchell Saxton",
   // 82710130 is the legacy/admin owner — do NOT map to a consultant.
 };
 
