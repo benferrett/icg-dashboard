@@ -135,6 +135,16 @@ async function searchDeals(body: any, cap = 1000): Promise<Deal[]> {
   return searchObjects("deals", body, cap);
 }
 
+// HubSpot's /search endpoint HARD-FAILS with a 400 ("There was a problem with
+// the request.") the moment the pagination offset `after` reaches 10,000 — it
+// refuses to page beyond the first 10k matches. A wide window (e.g. a full
+// month of all-source contacts) can hit this and, because the search is on the
+// critical dashboard path, the 400 propagates and the WHOLE tab fails to load.
+// So we stop paging just before the ceiling and return what we have rather than
+// letting the request 400. Callers that need the full population over a large
+// window must day-slice via searchAllByTime instead.
+const SEARCH_AFTER_CEILING = 9900; // last safe `after` offset (< 10k)
+
 // Generic paged search for any CRM object (deals, contacts, meetings, calls).
 async function searchObjects(
   objectType: string,
@@ -148,6 +158,15 @@ async function searchObjects(
     for (const r of json.results || []) out.push(r);
     after = json.paging?.next?.after;
     if (!after) break;
+    // Never let `after` reach the 10k ceiling — HubSpot 400s at that offset.
+    if (Number(after) >= SEARCH_AFTER_CEILING) {
+      console.warn(
+        `[hubspot] ${objectType} search hit the 10k pagination ceiling ` +
+          `(offset ${after}); returning first ${out.length} of ${json.total} ` +
+          `matches. Narrow the window or day-slice for the full set.`,
+      );
+      break;
+    }
   }
   return out;
 }
