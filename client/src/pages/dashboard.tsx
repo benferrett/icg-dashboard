@@ -17,6 +17,7 @@ import {
   LogOut,
   LayoutDashboard,
   Megaphone,
+  FlaskConical,
   Users,
   Target,
   FileSignature,
@@ -32,6 +33,7 @@ import {
 import { useState, useEffect } from "react";
 import { OverviewView } from "./views/OverviewView";
 import { MarketingView } from "./views/MarketingView";
+import { MarketingBetaView } from "./views/MarketingBetaView";
 import { ConsultantsView } from "./views/ConsultantsView";
 import { StrategistsView } from "./views/StrategistsView";
 import { ContractsView } from "./views/ContractsView";
@@ -43,6 +45,7 @@ import { ForecastingView } from "./views/ForecastingView";
 type TabKey =
   | "overview"
   | "marketing"
+  | "marketing_beta"
   | "funnel"
   | "consultants"
   | "strategists"
@@ -52,11 +55,22 @@ type TabKey =
   | "forecasting";
 
 // Tabs that own their own data window and therefore have no date/range picker.
-const SELF_WINDOWED_TABS: TabKey[] = ["business", "report2026", "forecasting"];
+// Marketing BETA owns its own month picker inside the view.
+const SELF_WINDOWED_TABS: TabKey[] = [
+  "business",
+  "report2026",
+  "forecasting",
+  "marketing_beta",
+];
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <LayoutDashboard className="h-4 w-4" /> },
   { key: "marketing", label: "Marketing", icon: <Megaphone className="h-4 w-4" /> },
+  {
+    key: "marketing_beta",
+    label: "Marketing BETA",
+    icon: <FlaskConical className="h-4 w-4" />,
+  },
   {
     key: "funnel",
     label: "Funnel Performance",
@@ -323,6 +337,7 @@ export default function DashboardPage({
           {tab === "contracts" && (
             <ContractsView d={d} loading={loading} periodLabel={periodLabel} />
           )}
+          {tab === "marketing_beta" && <MarketingBetaView token={token} />}
           {tab === "business" && <BusinessPerformanceView token={token} />}
           {tab === "report2026" && <Report2026View token={token} />}
           {tab === "forecasting" && <ForecastingView token={token} />}

@@ -439,3 +439,74 @@ export interface MetaData {
     currency: string;
   };
 }
+
+// ---- Marketing BETA (lead-cohort CAC) -------------------------------------
+// A single lead month, with every lead followed forward for all time. See
+// server/icg/marketing-beta.ts for the definitions.
+export interface MarketingBetaCohortRange {
+  year: number;
+  month: number; // 1..12
+  label: string;
+  start: string;
+  end: string;
+}
+
+export interface MarketingBetaChannelStats {
+  channel: "META" | "EMBR" | "TOTAL";
+  leads: number;
+  booked: number;
+  sat: number;
+  members: number;
+  spend: number;
+  cpl: number;
+  costPerBooking: number;
+  costPerSat: number;
+  cac: number;
+  bookRate: number;
+  sitRate: number;
+  conversionRate: number;
+  overallConversion: number;
+}
+
+export interface MarketingBetaLead {
+  contactId: string;
+  channel: "META" | "EMBR";
+  name?: string;
+  createdAt: string;
+  booked: boolean;
+  sat: boolean;
+  member: boolean;
+  memberDate?: string;
+  daysToMember?: number;
+}
+
+export interface MarketingBetaMaturity {
+  days: number | null;
+  label: string;
+  members: number;
+}
+
+export type MarketingBeta =
+  | {
+      ok: true;
+      cohort: MarketingBetaCohortRange;
+      generatedAt: string;
+      meta: MarketingBetaChannelStats;
+      embr: MarketingBetaChannelStats;
+      total: MarketingBetaChannelStats;
+      metaSpendStatus: "ok" | "error";
+      metaSpendMessage?: string;
+      leads: MarketingBetaLead[];
+      maturity: MarketingBetaMaturity[];
+      // Cache metadata (added by the routes layer)
+      cached?: boolean;
+      computedAt?: string;
+      cacheAgeSec?: number;
+      stale?: boolean;
+      updating?: boolean;
+    }
+  | {
+      ok: false;
+      cohort: MarketingBetaCohortRange;
+      error: string;
+    };
