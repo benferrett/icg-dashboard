@@ -5,6 +5,7 @@ import crypto from "node:crypto";
 import { buildDashboard, businessPerformance, monthlyReport2026, forecast } from "./icg/metrics";
 import { parsePeriod, parseCustomRange } from "./icg/period";
 import { metaAds } from "./icg/meta";
+import { marketingBeta, parseLeadMonth } from "./icg/marketing-beta";
 import {
   readSnapshot,
   writeSnapshot,
@@ -321,6 +322,26 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to build 2026 report" });
+    }
+  });
+
+  // Marketing BETA — lead-cohort CAC for a single lead month.
+  // Follows every lead created in the month FORWARD, for all time, and
+  // reports leads/booked/sat/members with spend keyed to when the leads
+  // were generated (Meta invoiced spend + $154 per EMBR lead). Cached per
+  // month so switching months stays fast.
+  app.get("/api/marketing-beta", requireAuth, async (req, res) => {
+    try {
+      const force = req.query.refresh === "1";
+      const cohort = parseLeadMonth(req.query.month as string | undefined);
+      const data = await cached(
+        `marketing-beta:${cohort.year}-${String(cohort.month).padStart(2, "0")}`,
+        () => marketingBeta(cohort),
+        force,
+      );
+      res.json(data);
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to build marketing beta" });
     }
   });
 
