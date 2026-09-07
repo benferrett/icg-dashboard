@@ -150,3 +150,40 @@ script/build.ts     # builds client (vite) + server (esbuild) → dist/
   automatic retry on HTTP 429, so large pipelines load without errors.
 - **Security:** `.env` is git-ignored. Never commit real tokens — set them in
   Railway Variables instead.
+
+---
+
+## Accounts Receivable
+
+The **Accounts Receivable** tab pulls open ACCREC invoices from the three
+state-entity Xero organisations (VIC / QLD / WA) in parallel and reconciles
+them against locally-recorded "marked paid" overrides. It powers:
+
+- an interactive AR view (aged debtors, headline totals, sortable/filterable
+  invoice table) at `/api/ar/invoices`,
+- per-invoice **Follow-up** emails sent from
+  `accounts@innercirclegroup.com.au` via Gmail send-as, and
+- a **Weekly Unpaid Vendor Commissions** email (same layout as the manual
+  Monday report), sendable ad-hoc from the dashboard.
+
+### Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `XERO_CLIENT_ID` / `XERO_CLIENT_SECRET` | Xero Custom Connection app credentials |
+| `XERO_REFRESH_TOKEN` | Long-lived OAuth2 refresh token (scopes: `accounting.transactions.read`, `accounting.contacts.read`) |
+| `GMAIL_ACCOUNTS_CLIENT_ID` / `GMAIL_ACCOUNTS_CLIENT_SECRET` | Google Cloud OAuth client for the accounts mailbox |
+| `GMAIL_ACCOUNTS_REFRESH_TOKEN` | Refresh token authorised as `accounts@innercirclegroup.com.au` with the `gmail.send` scope |
+
+### Persistence
+
+Manual "marked paid" overrides are stored in a small SQLite file (`ar.db`)
+using the same fallback ladder as the HubSpot response cache:
+
+1. `DATA_DIR` (explicit override), else
+2. `RAILWAY_VOLUME_MOUNT_PATH` when a Railway volume is attached, else
+3. the current working directory (ephemeral).
+
+Attach a Railway volume for the AR overrides to survive redeploys. Without
+one, overrides live only for the container's lifetime — the underlying Xero
+data is unaffected either way.

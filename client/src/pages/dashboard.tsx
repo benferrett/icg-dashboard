@@ -25,6 +25,7 @@ import {
   GitCompareArrows,
   CalendarRange,
   CalendarClock,
+  Receipt,
   AlertTriangle,
   Moon,
   Sun,
@@ -41,6 +42,7 @@ import { BusinessPerformanceView } from "./views/BusinessPerformanceView";
 import { FunnelPerformanceView } from "./views/FunnelPerformanceView";
 import { Report2026View } from "./views/Report2026View";
 import { ForecastingView } from "./views/ForecastingView";
+import { AccountsReceivableView } from "./views/AccountsReceivableView";
 
 type TabKey =
   | "overview"
@@ -52,15 +54,18 @@ type TabKey =
   | "contracts"
   | "business"
   | "report2026"
-  | "forecasting";
+  | "forecasting"
+  | "accounts_receivable";
 
 // Tabs that own their own data window and therefore have no date/range picker.
 // Marketing BETA owns its own month picker inside the view.
+// Accounts Receivable is always "as of now" (open invoices), no date picker.
 const SELF_WINDOWED_TABS: TabKey[] = [
   "business",
   "report2026",
   "forecasting",
   "marketing_beta",
+  "accounts_receivable",
 ];
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
@@ -82,6 +87,11 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "business", label: "Business Performance", icon: <TrendingUp className="h-4 w-4" /> },
   { key: "report2026", label: "2026 Reporting", icon: <CalendarRange className="h-4 w-4" /> },
   { key: "forecasting", label: "Forecasting", icon: <CalendarClock className="h-4 w-4" /> },
+  {
+    key: "accounts_receivable",
+    label: "Accounts Receivable",
+    icon: <Receipt className="h-4 w-4" />,
+  },
 ];
 
 function useDarkMode() {
@@ -341,6 +351,7 @@ export default function DashboardPage({
           {tab === "business" && <BusinessPerformanceView token={token} />}
           {tab === "report2026" && <Report2026View token={token} />}
           {tab === "forecasting" && <ForecastingView token={token} />}
+          {tab === "accounts_receivable" && <AccountsReceivableView token={token} />}
 
           <footer className="text-center text-xs text-muted-foreground pt-8 pb-4">
             Live data from HubSpot &amp; Meta · cached up to 5 min · Inner Circle Group
