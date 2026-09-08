@@ -566,10 +566,16 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // state param derived from DASHBOARD_PASSWORD (no cookies needed).
   const XERO_AUTH_URL = "https://login.xero.com/identity/connect/authorize";
   const XERO_TOKEN_URL = "https://identity.xero.com/connect/token";
+  // Xero requires granular scopes for apps created on/after 2 Mar 2026
+  // (this app is one of them). We need invoices + contacts for the AR view;
+  // payments/banktransactions are included so we can reconcile received cash
+  // without another reconnect down the track.
   const XERO_OAUTH_SCOPES = [
     "offline_access",
-    "accounting.transactions.read",
+    "accounting.invoices.read",
     "accounting.contacts.read",
+    "accounting.payments.read",
+    "accounting.banktransactions.read",
   ].join(" ");
   function signState(pw: string): string {
     const ts = Date.now().toString();
