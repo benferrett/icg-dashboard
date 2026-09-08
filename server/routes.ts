@@ -558,6 +558,136 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     res.json({ overrides: arOverridesInfo() });
   });
 
+  // --- Xero OAuth helper (one-time refresh-token bootstrap) ---------------
+  // These two routes exist so Ben can complete the Xero OAuth2 auth-code flow
+  // in his browser and get a real refresh token to paste into Railway. They
+  // do NOT persist the token anywhere — the token is shown once on the
+  // callback page and Ben copies it manually. Auth is guarded by a signed
+  // state param derived from DASHBOARD_PASSWORD (no cookies needed).
+  const XERO_AUTH_URL = "https://login.xero.com/identity/connect/authorize";
+  const XERO_TOKEN_URL = "https://identity.xero.com/connect/token";
+  const XERO_OAUTH_SCOPES = [
+    "offline_access",
+    "accounting.transactions.read",
+    "accounting.contacts.read",
+  ].join(" ");
+  function signState(pw: string): string {
+    const ts = Date.now().toString();
+    const sig = crypto.createHmac("sha256", pw).update(ts).digest("hex").slice(0, 16);
+    return `${ts}.${sig}`;
+  }
+  function verifyState(state: string, pw: string): boolean {
+    const [ts, sig] = state.split(".");
+    if (!ts || !sig) return false;
+    const expected = crypto.createHmac("sha256", pw).update(ts).digest("hex").slice(0, 16);
+    if (expected !== sig) return false;
+    // 15-minute validity
+    if (Date.now() - Number(ts) > 15 * 60 * 1000) return false;
+    return true;
+  }
+  app.get("/xero/auth", (req, res) => {
+    const pw = String(req.query.pw || "");
+    if (pw !== DASHBOARD_PASSWORD) {
+      return res
+        .status(401)
+        .send("Wrong password. Visit /xero/auth?pw=YOUR_DASHBOARD_PASSWORD");
+    }
+    const clientId = process.env.XERO_CLIENT_ID;
+    if (!clientId) {
+      return res.status(500).send("XERO_CLIENT_ID not set in Railway env vars.");
+    }
+    const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol;
+    const host = req.headers.host;
+    const redirectUri = `${proto}://${host}/xero/callback`;
+    const url = new URL(XERO_AUTH_URL);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("client_id", clientId);
+    url.searchParams.set("redirect_uri", redirectUri);
+    url.searchParams.set("scope", XERO_OAUTH_SCOPES);
+    url.searchParams.set("state", signState(DASHBOARD_PASSWORD));
+    res.redirect(url.toString());
+  });
+  app.get("/xero/callback", async (req, res) => {
+    const code = String(req.query.code || "");
+    const state = String(req.query.state || "");
+    const err = String(req.query.error || "");
+    if (err) {
+      return res
+        .status(400)
+        .send(`<h1>Xero returned an error</h1><pre>${err}</pre>`);
+    }
+    if (!code || !state || !verifyState(state, DASHBOARD_PASSWORD)) {
+      return res
+        .status(400)
+        .send("Invalid or expired auth link. Start again at /xero/auth?pw=...");
+    }
+    const clientId = process.env.XERO_CLIENT_ID;
+    const clientSecret = process.env.XERO_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(500).send("XERO_CLIENT_ID or XERO_CLIENT_SECRET missing.");
+    }
+    const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol;
+    const host = req.headers.host;
+    const redirectUri = `${proto}://${host}/xero/callback`;
+    const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      redirect_uri: redirectUri,
+    });
+    try {
+      const tokRes = await fetch(XERO_TOKEN_URL, {
+        method: "POST",
+        headers: {
+          Authorization: `Basic ${basic}`,
+          "Content-Type": "application/x-www-form-urlencoded",
+        },
+        body: body.toString(),
+      });
+      const tokTxt = await tokRes.text();
+      if (!tokRes.ok) {
+        return res
+          .status(500)
+          .send(`<h1>Xero token exchange failed</h1><pre>${tokRes.status}\n${tokTxt}</pre>`);
+      }
+      const tok = JSON.parse(tokTxt) as {
+        access_token: string;
+        refresh_token: string;
+        expires_in: number;
+        scope: string;
+      };
+      // Also fetch the list of connected tenants so Ben can verify all 4 orgs.
+      const connRes = await fetch("https://api.xero.com/connections", {
+        headers: { Authorization: `Bearer ${tok.access_token}` },
+      });
+      const conns = connRes.ok ? await connRes.json() : [];
+      const tenantsHtml = Array.isArray(conns)
+        ? `<h3>Authorised orgs (${conns.length})</h3><ul>${conns
+            .map(
+              (c: any) =>
+                `<li><b>${c.tenantName || c.tenantId}</b> — <code>${c.tenantId}</code></li>`,
+            )
+            .join("")}</ul>`
+        : "";
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(`<!doctype html><meta charset="utf-8"><title>Xero connected</title>
+<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:820px;margin:40px auto;padding:0 20px;color:#111}code,pre{background:#f4f4f5;padding:2px 6px;border-radius:4px;word-break:break-all}pre{padding:12px;white-space:pre-wrap}h1{color:#059669}.warn{background:#fef3c7;border:1px solid #f59e0b;padding:12px;border-radius:6px;margin:16px 0}</style>
+<h1>✓ Xero authorised</h1>
+<p>Copy the refresh token below and paste it into Railway as <code>XERO_REFRESH_TOKEN</code>. Then <b>remove</b> <code>XERO_GRANT_TYPE</code> (or set it to <code>refresh_token</code>). Railway will redeploy automatically.</p>
+<div class="warn"><b>Show this page only once</b> — treat the refresh token like a password. If you close the tab, just re-run <code>/xero/auth?pw=…</code>.</div>
+<h3>XERO_REFRESH_TOKEN</h3>
+<pre id="tok">${tok.refresh_token}</pre>
+<button onclick="navigator.clipboard.writeText(document.getElementById('tok').innerText);this.innerText='Copied'">Copy refresh token</button>
+<p style="margin-top:24px">Scopes granted: <code>${tok.scope}</code></p>
+${tenantsHtml}
+<p style="margin-top:32px;color:#666">After Railway redeploys, open the <a href="/">Dashboard</a> → Accounts Receivable tab. If invoices show up, you're done.</p>`);
+    } catch (e: any) {
+      res
+        .status(500)
+        .send(`<h1>Callback error</h1><pre>${e?.message || String(e)}</pre>`);
+    }
+  });
+
   // Begin keeping the common periods warm in the background.
   startWarmer();
   // Begin the HubSpot response-cache sync schedule.
