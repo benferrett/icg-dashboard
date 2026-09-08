@@ -1,4 +1,6 @@
 // Xero API client for the Accounts Receivable feature.
+import { currentRefreshToken, persistRefreshToken } from "./xero-refresh-store";
+
 //
 // AUTH: OAuth2 refresh-token flow. A long-lived refresh token (issued once via a
 // Xero Custom Connection OR a standard OAuth2 authorisation) is exchanged for a
@@ -87,8 +89,10 @@ async function refreshAccessToken(): Promise<AccessToken> {
       scope: process.env.XERO_SCOPES || "accounting.transactions.read accounting.contacts.read",
     });
   } else {
-    // Standard OAuth2 — refresh_token grant.
-    const refreshToken = process.env.XERO_REFRESH_TOKEN;
+    // Standard OAuth2 — refresh_token grant. Xero rotates the refresh_token
+    // on every exchange, so we prefer the persisted (newer) copy over the env
+    // var, and write the rotated token back below.
+    const refreshToken = currentRefreshToken();
     if (!refreshToken) {
       throw new Error(
         "Xero refresh_token grant requires XERO_REFRESH_TOKEN. Set XERO_GRANT_TYPE=client_credentials if using a Custom Connection.",
@@ -115,9 +119,19 @@ async function refreshAccessToken(): Promise<AccessToken> {
       `Xero token ${grantType} failed (${res.status}): ${txt.slice(0, 200)}`,
     );
   }
-  const json = (await res.json()) as { access_token: string; expires_in: number };
+  const json = (await res.json()) as {
+    access_token: string;
+    expires_in: number;
+    refresh_token?: string;
+  };
   const expiresAt = Date.now() + (json.expires_in - 30) * 1000; // trim 30s for clock skew
   cachedToken = { token: json.access_token, expiresAt };
+  // Xero rotates the refresh_token on every exchange. If we don't persist the
+  // new one, the next refresh (about 30 min later) fails with
+  // "invalid_grant / Refresh token has been consumed".
+  if (grantType === "refresh_token" && json.refresh_token) {
+    persistRefreshToken(json.refresh_token);
+  }
   return cachedToken;
 }
 

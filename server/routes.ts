@@ -718,6 +718,15 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         expires_in: number;
         scope: string;
       };
+      // Persist the fresh refresh_token to disk so the very next access-token
+      // refresh (~30 min from now) doesn't blow up trying to reuse the
+      // already-consumed env-var one. Xero rotates on every exchange.
+      try {
+        const { persistRefreshToken } = await import("./icg/xero-refresh-store");
+        persistRefreshToken(tok.refresh_token);
+      } catch (e) {
+        console.error("[xero/callback] failed to persist refresh token:", (e as any)?.message);
+      }
       // Also fetch the list of connected tenants so Ben can verify all 4 orgs.
       const connRes = await fetch("https://api.xero.com/connections", {
         headers: { Authorization: `Bearer ${tok.access_token}` },
@@ -735,7 +744,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.send(`<!doctype html><meta charset="utf-8"><title>Xero connected</title>
 <style>body{font-family:system-ui,-apple-system,sans-serif;max-width:820px;margin:40px auto;padding:0 20px;color:#111}code,pre{background:#f4f4f5;padding:2px 6px;border-radius:4px;word-break:break-all}pre{padding:12px;white-space:pre-wrap}h1{color:#059669}.warn{background:#fef3c7;border:1px solid #f59e0b;padding:12px;border-radius:6px;margin:16px 0}</style>
 <h1>✓ Xero authorised</h1>
-<p>Copy the refresh token below and paste it into Railway as <code>XERO_REFRESH_TOKEN</code>. Then <b>remove</b> <code>XERO_GRANT_TYPE</code> (or set it to <code>refresh_token</code>). Railway will redeploy automatically.</p>
+<p><b>Xero is already working — no Railway edit needed.</b> The refresh token has been persisted to disk, so mid-process refreshes will succeed automatically. Only paste it into Railway <code>XERO_REFRESH_TOKEN</code> if you want it to survive a redeploy (Railway&rsquo;s disk is ephemeral unless a volume is mounted).</p>
 <div class="warn"><b>Show this page only once</b> — treat the refresh token like a password. If you close the tab, just re-run <code>/xero/auth?pw=…</code>.</div>
 <h3>XERO_REFRESH_TOKEN</h3>
 <pre id="tok">${tok.refresh_token}</pre>
