@@ -128,24 +128,48 @@ function classify(
   return { bucket: is_overdue ? "overdue" : "within_terms", days_overdue, is_overdue };
 }
 
+// Per-tenant fetch outcome; exposed on the API response so operators can see
+// exactly which tenant failed and why (missing env var, wrong grant type,
+// unauthorised org, etc.) instead of silently getting an empty list.
+export interface TenantFetchStatus {
+  state: string;
+  tenant_id: string;
+  ok: boolean;
+  invoice_count: number;
+  error?: string;
+}
+
 // Fetch + normalise open AR across all three state entities.
-export async function getUnpaidInvoices(): Promise<UnpaidInvoicesResult> {
+export async function getUnpaidInvoices(): Promise<UnpaidInvoicesResult & { tenant_status: TenantFetchStatus[] }> {
   const overrides = listOverrides();
   const now = new Date();
 
-  // Fan out to all three tenants in parallel; on a per-tenant failure we log
-  // and skip that tenant rather than failing the whole endpoint.
+  // Fan out to all three tenants in parallel; on a per-tenant failure we log,
+  // record the error in tenant_status, and skip that tenant rather than
+  // failing the whole endpoint. The endpoint always returns a shape; the UI
+  // can surface tenant errors to the operator without breaking.
   const perTenant = await Promise.all(
-    XERO_TENANTS.map(async (t: XeroTenant) => {
+    XERO_TENANTS.map(async (t: XeroTenant): Promise<{ tenant: XeroTenant; rows: XeroInvoice[]; status: TenantFetchStatus }> => {
       try {
         const rows = await listOpenInvoices(t.id);
-        return { tenant: t, rows };
+        return {
+          tenant: t,
+          rows,
+          status: { state: t.state, tenant_id: t.id, ok: true, invoice_count: rows.length },
+        };
       } catch (e) {
-        console.error(`[ar] listOpenInvoices ${t.state} failed:`, (e as any)?.message);
-        return { tenant: t, rows: [] as XeroInvoice[] };
+        const msg = (e as any)?.message || String(e);
+        console.error(`[ar] listOpenInvoices ${t.state} failed:`, msg);
+        return {
+          tenant: t,
+          rows: [] as XeroInvoice[],
+          status: { state: t.state, tenant_id: t.id, ok: false, invoice_count: 0, error: msg },
+        };
       }
     }),
   );
+
+  const tenant_status = perTenant.map((p) => p.status);
 
   // Flatten + classify.
   const active: OpenInvoice[] = [];
@@ -195,7 +219,7 @@ export async function getUnpaidInvoices(): Promise<UnpaidInvoicesResult> {
     else active.push(norm);
   }
 
-  return { invoices: active, cleared };
+  return { invoices: active, cleared, tenant_status };
 }
 
 // --- Aged debtors summary -------------------------------------------------

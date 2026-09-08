@@ -50,26 +50,56 @@ function sleep(ms: number) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
-// Exchange the persistent refresh token for a fresh access token. Xero rotates
-// the refresh token on every exchange in some flows — for Custom Connection
-// (client credentials) it does not, and for standard OAuth2 the rotation is
-// benign since we always request `offline_access` and keep re-using the same
-// initial refresh token from env. If the env token becomes invalid the caller
-// must rotate `XERO_REFRESH_TOKEN` — we log clearly when that happens.
+// Exchange credentials for a fresh access token. Supports BOTH Xero auth flows:
+//
+//  * `refresh_token` (standard OAuth2) — requires XERO_REFRESH_TOKEN set to a real
+//    refresh token obtained via the auth-code flow. Xero rotates the refresh
+//    token on every exchange, but re-using the initial one from env is benign
+//    while `offline_access` is granted.
+//
+//  * `client_credentials` (Custom Connection) — no refresh token needed; the
+//    client_id/client_secret pair are exchanged directly for an access token,
+//    and the connection is bound to whichever Xero org(s) were authorised at
+//    the developer.xero.com Custom Connection setup screen.
+//
+// Grant is picked by `XERO_GRANT_TYPE` (default `refresh_token` for backwards
+// compat). Set `XERO_GRANT_TYPE=client_credentials` in Railway if you're using
+// a Xero Custom Connection.
 async function refreshAccessToken(): Promise<AccessToken> {
   const clientId = process.env.XERO_CLIENT_ID;
   const clientSecret = process.env.XERO_CLIENT_SECRET;
-  const refreshToken = process.env.XERO_REFRESH_TOKEN;
-  if (!clientId || !clientSecret || !refreshToken) {
+  const grantType = (process.env.XERO_GRANT_TYPE || "refresh_token").trim();
+
+  if (!clientId || !clientSecret) {
     throw new Error(
-      "Xero credentials not configured (set XERO_CLIENT_ID, XERO_CLIENT_SECRET, XERO_REFRESH_TOKEN).",
+      "Xero credentials not configured (set XERO_CLIENT_ID and XERO_CLIENT_SECRET).",
     );
   }
+
   const basic = Buffer.from(`${clientId}:${clientSecret}`).toString("base64");
-  const body = new URLSearchParams({
-    grant_type: "refresh_token",
-    refresh_token: refreshToken,
-  });
+  let body: URLSearchParams;
+
+  if (grantType === "client_credentials") {
+    // Custom Connection — client_credentials grant. Scope must be an exact
+    // subset of what was granted at Custom Connection setup, space-separated.
+    body = new URLSearchParams({
+      grant_type: "client_credentials",
+      scope: process.env.XERO_SCOPES || "accounting.transactions.read accounting.contacts.read",
+    });
+  } else {
+    // Standard OAuth2 — refresh_token grant.
+    const refreshToken = process.env.XERO_REFRESH_TOKEN;
+    if (!refreshToken) {
+      throw new Error(
+        "Xero refresh_token grant requires XERO_REFRESH_TOKEN. Set XERO_GRANT_TYPE=client_credentials if using a Custom Connection.",
+      );
+    }
+    body = new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    });
+  }
+
   const res = await fetch(TOKEN_URL, {
     method: "POST",
     headers: {
@@ -80,8 +110,10 @@ async function refreshAccessToken(): Promise<AccessToken> {
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
-    console.error(`[xero] token refresh failed ${res.status}: ${txt.slice(0, 300)}`);
-    throw new Error(`Xero token refresh failed (${res.status}). Rotate XERO_REFRESH_TOKEN.`);
+    console.error(`[xero] token ${grantType} failed ${res.status}: ${txt.slice(0, 300)}`);
+    throw new Error(
+      `Xero token ${grantType} failed (${res.status}): ${txt.slice(0, 200)}`,
+    );
   }
   const json = (await res.json()) as { access_token: string; expires_in: number };
   const expiresAt = Date.now() + (json.expires_in - 30) * 1000; // trim 30s for clock skew
