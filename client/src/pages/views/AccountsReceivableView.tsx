@@ -278,9 +278,10 @@ export function AccountsReceivableView({ token }: { token: string }) {
     setFollowupInv(inv);
     setFuTo(inv.contact_email || "");
     setFuCc(DEFAULT_CC);
-    // Build a minimal client-side polite reminder so the user can review before
-    // sending. The server will also render a template if any field is missing,
-    // but a WYSIWYG preview is friendlier for the operator.
+    // Only the OPENING paragraphs are editable now — the server wraps them in
+    // ICG-branded HTML chrome (header, invoice card, sign-off, footer). This
+    // stops the operator from accidentally shipping bare-<p> plain text and
+    // guarantees every follow-up looks the same.
     const propPart = inv.reference && inv.reference.trim() ? ` (${inv.reference.trim()})` : "";
     const subject = `Friendly reminder — ICG invoice ${inv.invoice_number}${propPart} — ${fmtAudFull(inv.amount_due)}`;
     const salut = (inv.contact_name || "").split(/\s+/)[0] || "there";
@@ -295,19 +296,23 @@ export function AccountsReceivableView({ token }: { token: string }) {
         : `Hi ${salut},\n\nJust a friendly heads-up on ICG invoice ${inv.invoice_number}${
             inv.reference ? ` for ${inv.reference}` : ""
           }, issued by ${inv.tenant_name} for ${fmtAudFull(inv.amount_due)}, which is due on ${dueLabel}. If there's anything you need from us to have it processed on time, please let me know.`;
-    const body = `${opener}\n\nThanks so much for your help.\n\nKind regards,\nICG Accounts\nInner Circle Group\naccounts@innercirclegroup.com.au\nABN 52 690 564 786`;
     setFuSubject(subject);
-    setFuBody(body);
+    setFuBody(opener);
     setFollowupOpen(true);
   }
+
+  // Live preview URL — iframe fetches the branded HTML the server would
+  // actually send, given the current body text. Debounced via a keyed string.
+  const previewSrc = useMemo(() => {
+    if (!followupInv) return "";
+    const API_BASE = "__PORT_5000__".startsWith("__") ? "" : "__PORT_5000__";
+    const params = new URLSearchParams({ body: fuBody });
+    return `${API_BASE}/api/ar/invoices/${followupInv.invoice_id}/followup-preview?${params.toString()}&t=${token}`;
+  }, [followupInv, fuBody, token]);
 
   const sendFollowupMut = useMutation({
     mutationFn: async () => {
       if (!followupInv) throw new Error("No invoice selected");
-      const html = fuBody
-        .split(/\n\n+/)
-        .map((p) => `<p>${p.replace(/\n/g, "<br>")}</p>`)
-        .join("\n");
       return apiPost<{ id: string; to: string; subject: string }>(
         `/api/ar/invoices/${followupInv.invoice_id}/send-followup`,
         token,
@@ -315,8 +320,7 @@ export function AccountsReceivableView({ token }: { token: string }) {
           to: fuTo,
           cc: fuCc,
           subject: fuSubject,
-          html,
-          text: fuBody,
+          body: fuBody,
         },
       );
     },
@@ -632,46 +636,71 @@ export function AccountsReceivableView({ token }: { token: string }) {
         </div>
       </Card>
 
-      {/* Follow-up dialog */}
+      {/* Follow-up dialog — edit fields on the left, live branded preview on
+          the right so operators see exactly what the vendor will receive. */}
       <Dialog open={followupOpen} onOpenChange={setFollowupOpen}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-w-5xl">
           <DialogHeader>
             <DialogTitle>Send follow-up</DialogTitle>
             <DialogDescription>
-              From accounts@innercirclegroup.com.au. Review and edit before sending.
+              From accounts@innercirclegroup.com.au. Edit the message on the left — the branded email preview on the right updates live.
             </DialogDescription>
           </DialogHeader>
-          <div className="grid gap-3">
-            <div className="grid gap-1.5">
-              <Label htmlFor="fu-to">To</Label>
-              <Input
-                id="fu-to"
-                value={fuTo}
-                onChange={(e) => setFuTo(e.target.value)}
-                placeholder="vendor@example.com"
-              />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Editable fields */}
+            <div className="grid gap-3 content-start">
+              <div className="grid gap-1.5">
+                <Label htmlFor="fu-to">To</Label>
+                <Input
+                  id="fu-to"
+                  value={fuTo}
+                  onChange={(e) => setFuTo(e.target.value)}
+                  placeholder="vendor@example.com"
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="fu-cc">CC</Label>
+                <Input id="fu-cc" value={fuCc} onChange={(e) => setFuCc(e.target.value)} />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="fu-subject">Subject</Label>
+                <Input
+                  id="fu-subject"
+                  value={fuSubject}
+                  onChange={(e) => setFuSubject(e.target.value)}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label htmlFor="fu-body">Message (opening paragraphs only — the branded header, invoice card, sign-off and footer are added automatically)</Label>
+                <Textarea
+                  id="fu-body"
+                  value={fuBody}
+                  onChange={(e) => setFuBody(e.target.value)}
+                  rows={12}
+                  className="text-sm"
+                />
+              </div>
             </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="fu-cc">CC</Label>
-              <Input id="fu-cc" value={fuCc} onChange={(e) => setFuCc(e.target.value)} />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="fu-subject">Subject</Label>
-              <Input
-                id="fu-subject"
-                value={fuSubject}
-                onChange={(e) => setFuSubject(e.target.value)}
-              />
-            </div>
-            <div className="grid gap-1.5">
-              <Label htmlFor="fu-body">Message</Label>
-              <Textarea
-                id="fu-body"
-                value={fuBody}
-                onChange={(e) => setFuBody(e.target.value)}
-                rows={14}
-                className="font-mono text-xs"
-              />
+            {/* Live preview */}
+            <div className="grid gap-1.5 content-start">
+              <Label>Preview</Label>
+              <div className="border rounded overflow-hidden bg-[#F6F5F3]">
+                {previewSrc ? (
+                  <iframe
+                    key={followupInv?.invoice_id}
+                    src={previewSrc}
+                    title="Follow-up email preview"
+                    className="w-full h-[520px] bg-white"
+                  />
+                ) : (
+                  <div className="h-[520px] flex items-center justify-center text-sm text-muted-foreground">
+                    Preview will appear here.
+                  </div>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Preview refreshes when the message body changes. The live send also fetches the current Xero “View &amp; pay” URL.
+              </p>
             </div>
           </div>
           <DialogFooter>

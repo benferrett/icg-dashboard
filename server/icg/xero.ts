@@ -260,6 +260,21 @@ export interface XeroContact {
   Addresses?: Array<{ AddressType?: string; AddressLine1?: string; City?: string; Region?: string; PostalCode?: string }>;
 }
 
+// Fetch the Xero "view & pay" online-invoice URL for a single invoice. Xero
+// exposes this as a separate endpoint per invoice because the URL contains a
+// short-lived signed token; we call it lazily when sending a follow-up email
+// rather than on every AR list load.
+export async function getOnlineInvoiceUrl(tenantId: string, invoiceId: string): Promise<string | null> {
+  try {
+    const json = await xeroGet<any>(tenantId, `/api.xro/2.0/Invoices/${invoiceId}/OnlineInvoice`);
+    const url = json?.OnlineInvoices?.[0]?.OnlineInvoiceUrl || null;
+    return typeof url === "string" && url.startsWith("http") ? url : null;
+  } catch (e) {
+    console.error(`[xero] getOnlineInvoiceUrl ${invoiceId} failed:`, (e as any)?.message);
+    return null;
+  }
+}
+
 export async function getContact(tenantId: string, contactId: string): Promise<XeroContact | null> {
   try {
     const json = await xeroGet<any>(tenantId, `/api.xro/2.0/Contacts/${contactId}`);

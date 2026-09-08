@@ -19,14 +19,20 @@ import { markPaid, unmarkPaid, arOverridesInfo } from "./icg/ar-overrides";
 import { sendMail } from "./icg/mailer";
 import { politeReminderTemplate } from "./icg/ar-templates";
 import { buildWeeklyReport, sendWeeklyReport } from "./icg/ar-weekly";
-import { listOpenInvoices, XERO_TENANTS } from "./icg/xero";
+import { listOpenInvoices, getOnlineInvoiceUrl, XERO_TENANTS } from "./icg/xero";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "InnerCircle2026$$";
 const sessions = new Set<string>();
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
-  const token = req.headers["x-icg-token"] as string | undefined;
+  // Preferred: x-icg-token header (set by the SPA's apiGet/apiPost helpers).
+  // Fallback: ?t=<token> query param, needed for iframe-loaded routes (email
+  // preview) where you can't set custom request headers from HTML alone. The
+  // query fallback still requires the same session token as the header.
+  const token =
+    (req.headers["x-icg-token"] as string | undefined) ||
+    (typeof req.query.t === "string" ? (req.query.t as string) : undefined);
   if (token && sessions.has(token)) return next();
   return res.status(401).json({ error: "Unauthorized" });
 }
@@ -476,62 +482,111 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         to?: string | string[];
         cc?: string | string[];
         bcc?: string | string[];
-        subject?: string;
-        html?: string;
-        text?: string;
+        subject?: string; // optional override; defaults to "Friendly reminder — ICG invoice …"
+        body?: string;    // optional plain-text body override; defaults to the polite template
       };
-      let { subject, html, text } = body;
       const to = body.to;
       if (!to) return res.status(400).json({ error: "to required" });
 
-      // If any of subject/html/text is missing, fetch this invoice fresh from
-      // Xero to render a polite reminder. We look it up across all three state
-      // tenants because the caller isn't required to know which one owns it.
-      if (!subject || !html || !text) {
-        let found: { tenant: (typeof XERO_TENANTS)[number]; invoice: Awaited<ReturnType<typeof listOpenInvoices>>[number] } | null = null;
-        for (const t of XERO_TENANTS) {
-          try {
-            const rows = await listOpenInvoices(t.id);
-            const inv = rows.find((r) => r.InvoiceID === invoiceId);
-            if (inv) {
-              found = { tenant: t, invoice: inv };
-              break;
-            }
-          } catch {
-            /* try next */
+      // Look the invoice up in Xero so we always have the authoritative data
+      // (amount, due date, contact, property/ref, tenant name) for the branded
+      // card the template renders. This closes off the old vector where the
+      // frontend could ship raw <p>-wrapped HTML that bypassed all branding.
+      let found: { tenant: (typeof XERO_TENANTS)[number]; invoice: Awaited<ReturnType<typeof listOpenInvoices>>[number] } | null = null;
+      for (const t of XERO_TENANTS) {
+        try {
+          const rows = await listOpenInvoices(t.id);
+          const inv = rows.find((r) => r.InvoiceID === invoiceId);
+          if (inv) {
+            found = { tenant: t, invoice: inv };
+            break;
           }
+        } catch {
+          /* try next */
         }
-        if (!found) return res.status(404).json({ error: "Invoice not found in any state tenant" });
-        const days_overdue = found.invoice.DueDate
-          ? Math.floor((Date.now() - found.invoice.DueDate.getTime()) / (24 * 60 * 60 * 1000))
-          : 0;
-        const tpl = politeReminderTemplate({
-          contact_name: found.invoice.Contact?.Name || null,
-          invoice_number: found.invoice.InvoiceNumber,
-          amount: found.invoice.AmountDue,
-          due_date: found.invoice.DueDate
-            ? found.invoice.DueDate.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })
-            : "—",
-          days_overdue,
-          property: found.invoice.Reference || null,
-          tenant_name: found.tenant.name,
-        });
-        subject = subject || tpl.subject;
-        html = html || tpl.html;
-        text = text || tpl.text;
       }
+      if (!found) return res.status(404).json({ error: "Invoice not found in any state tenant" });
+      const days_overdue = found.invoice.DueDate
+        ? Math.floor((Date.now() - found.invoice.DueDate.getTime()) / (24 * 60 * 60 * 1000))
+        : 0;
+
+      // Xero's short-lived "view & pay" URL. Best-effort — a missing URL just
+      // drops the CTA button from the email; the branded chrome + invoice
+      // summary still ship.
+      const online_invoice_url = await getOnlineInvoiceUrl(found.tenant.id, found.invoice.InvoiceID);
+
+      const tpl = politeReminderTemplate({
+        contact_name: found.invoice.Contact?.Name || null,
+        invoice_number: found.invoice.InvoiceNumber,
+        amount: found.invoice.AmountDue,
+        due_date: found.invoice.DueDate
+          ? found.invoice.DueDate.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })
+          : "—",
+        days_overdue,
+        property: found.invoice.Reference || null,
+        tenant_name: found.tenant.name,
+        online_invoice_url,
+        body_override: body.body || null,
+      });
+      const subject = body.subject && body.subject.trim() ? body.subject : tpl.subject;
 
       const result = await sendMail({
         to,
         cc: body.cc,
         bcc: body.bcc,
-        subject: subject!,
-        html,
-        text,
+        subject,
+        html: tpl.html,
+        text: tpl.text,
       });
       res.json({ id: result.id, threadId: result.threadId, to, cc: body.cc, subject });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "Failed to send follow-up" });
+    }
+  });
+
+  // Preview the branded follow-up as HTML so the dashboard dialog can render
+  // a live "what the vendor will see" iframe next to the editable body.
+  app.get("/api/ar/invoices/:invoiceId/followup-preview", requireAuth, async (req, res) => {
+    try {
+      const invoiceId = String(req.params.invoiceId || "");
+      const bodyText = typeof req.query.body === "string" ? req.query.body : "";
+      let found: { tenant: (typeof XERO_TENANTS)[number]; invoice: Awaited<ReturnType<typeof listOpenInvoices>>[number] } | null = null;
+      for (const t of XERO_TENANTS) {
+        try {
+          const rows = await listOpenInvoices(t.id);
+          const inv = rows.find((r) => r.InvoiceID === invoiceId);
+          if (inv) {
+            found = { tenant: t, invoice: inv };
+            break;
+          }
+        } catch {
+          /* try next */
+        }
+      }
+      if (!found) return res.status(404).send("Invoice not found");
+      const days_overdue = found.invoice.DueDate
+        ? Math.floor((Date.now() - found.invoice.DueDate.getTime()) / (24 * 60 * 60 * 1000))
+        : 0;
+      // Skip the Xero online URL lookup on preview to keep it snappy; the real
+      // send path fetches it. The CTA falls back to a placeholder anchor so the
+      // preview button still shows.
+      const tpl = politeReminderTemplate({
+        contact_name: found.invoice.Contact?.Name || null,
+        invoice_number: found.invoice.InvoiceNumber,
+        amount: found.invoice.AmountDue,
+        due_date: found.invoice.DueDate
+          ? found.invoice.DueDate.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })
+          : "—",
+        days_overdue,
+        property: found.invoice.Reference || null,
+        tenant_name: found.tenant.name,
+        online_invoice_url: "https://in.xero.com/preview",
+        body_override: bodyText || null,
+      });
+      res.setHeader("content-type", "text/html; charset=utf-8");
+      res.send(tpl.html);
+    } catch (e: any) {
+      res.status(500).send(e?.message || "Failed to render preview");
     }
   });
 
