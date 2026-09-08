@@ -694,6 +694,133 @@ ${tenantsHtml}
     }
   });
 
+  // --- Gmail OAuth helper (one-time refresh-token bootstrap) --------------
+  // Same pattern as /xero/auth above. Signs Ben in to accounts@ (must pick
+  // that account on Google's screen) and returns a refresh token to paste
+  // into Railway as GMAIL_ACCOUNTS_REFRESH_TOKEN. GMAIL_ACCOUNTS_CLIENT_ID
+  // and GMAIL_ACCOUNTS_CLIENT_SECRET must already be set (from your ICG
+  // Google Cloud OAuth client).
+  const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
+  const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
+  const GMAIL_OAUTH_SCOPES = [
+    "https://www.googleapis.com/auth/gmail.send",
+  ].join(" ");
+  app.get("/gmail/auth", (req, res) => {
+    const pw = String(req.query.pw || "");
+    if (pw !== DASHBOARD_PASSWORD) {
+      return res
+        .status(401)
+        .send("Wrong password. Visit /gmail/auth?pw=YOUR_DASHBOARD_PASSWORD");
+    }
+    const clientId = process.env.GMAIL_ACCOUNTS_CLIENT_ID;
+    if (!clientId) {
+      return res.status(500).send("GMAIL_ACCOUNTS_CLIENT_ID not set in Railway env vars.");
+    }
+    const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol;
+    const host = req.headers.host;
+    const redirectUri = `${proto}://${host}/gmail/callback`;
+    const url = new URL(GOOGLE_AUTH_URL);
+    url.searchParams.set("response_type", "code");
+    url.searchParams.set("client_id", clientId);
+    url.searchParams.set("redirect_uri", redirectUri);
+    url.searchParams.set("scope", GMAIL_OAUTH_SCOPES);
+    url.searchParams.set("access_type", "offline"); // required to get a refresh_token
+    url.searchParams.set("prompt", "consent"); // force-issue a new refresh_token even if already consented
+    url.searchParams.set("login_hint", "accounts@innercirclegroup.com.au");
+    url.searchParams.set("state", signState(DASHBOARD_PASSWORD));
+    res.redirect(url.toString());
+  });
+  app.get("/gmail/callback", async (req, res) => {
+    const code = String(req.query.code || "");
+    const state = String(req.query.state || "");
+    const err = String(req.query.error || "");
+    if (err) {
+      return res
+        .status(400)
+        .send(`<h1>Google returned an error</h1><pre>${err}</pre>`);
+    }
+    if (!code || !state || !verifyState(state, DASHBOARD_PASSWORD)) {
+      return res
+        .status(400)
+        .send("Invalid or expired auth link. Start again at /gmail/auth?pw=...");
+    }
+    const clientId = process.env.GMAIL_ACCOUNTS_CLIENT_ID;
+    const clientSecret = process.env.GMAIL_ACCOUNTS_CLIENT_SECRET;
+    if (!clientId || !clientSecret) {
+      return res.status(500).send("GMAIL_ACCOUNTS_CLIENT_ID or GMAIL_ACCOUNTS_CLIENT_SECRET missing.");
+    }
+    const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol;
+    const host = req.headers.host;
+    const redirectUri = `${proto}://${host}/gmail/callback`;
+    const body = new URLSearchParams({
+      grant_type: "authorization_code",
+      code,
+      client_id: clientId,
+      client_secret: clientSecret,
+      redirect_uri: redirectUri,
+    });
+    try {
+      const tokRes = await fetch(GOOGLE_TOKEN_URL, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      });
+      const tokTxt = await tokRes.text();
+      if (!tokRes.ok) {
+        return res
+          .status(500)
+          .send(`<h1>Google token exchange failed</h1><pre>${tokRes.status}\n${tokTxt}</pre>`);
+      }
+      const tok = JSON.parse(tokTxt) as {
+        access_token: string;
+        refresh_token?: string;
+        expires_in: number;
+        scope: string;
+        id_token?: string;
+      };
+      if (!tok.refresh_token) {
+        return res
+          .status(500)
+          .send(
+            `<h1>No refresh token returned</h1><p>This happens if you’ve already consented before. Revoke previous access at <a href=\"https://myaccount.google.com/permissions\">myaccount.google.com/permissions</a> and try again.</p>`,
+          );
+      }
+      // Fetch the email address to confirm which account was authorised.
+      let email = "(unknown)";
+      try {
+        const meRes = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+          headers: { Authorization: `Bearer ${tok.access_token}` },
+        });
+        if (meRes.ok) {
+          const me = (await meRes.json()) as { emailAddress?: string };
+          if (me.emailAddress) email = me.emailAddress;
+        }
+      } catch {
+        /* non-fatal */
+      }
+      const wrongAccountWarning =
+        email !== "accounts@innercirclegroup.com.au"
+          ? `<div class=\"warn\"><b>⚠ Wrong account:</b> you consented as <code>${email}</code> — the AR follow-ups need <code>accounts@innercirclegroup.com.au</code>. Revoke and re-run <code>/gmail/auth?pw=…</code> while signed in as accounts@.</div>`
+          : `<div style=\"background:#d1fae5;border:1px solid #059669;padding:12px;border-radius:6px;margin:16px 0\">✓ Consented as <code>${email}</code>. Perfect — this is the account AR follow-ups will send from.</div>`;
+      res.setHeader("Content-Type", "text/html; charset=utf-8");
+      res.send(`<!doctype html><meta charset="utf-8"><title>Gmail connected</title>
+<style>body{font-family:system-ui,-apple-system,sans-serif;max-width:820px;margin:40px auto;padding:0 20px;color:#111}code,pre{background:#f4f4f5;padding:2px 6px;border-radius:4px;word-break:break-all}pre{padding:12px;white-space:pre-wrap}h1{color:#059669}.warn{background:#fef3c7;border:1px solid #f59e0b;padding:12px;border-radius:6px;margin:16px 0}</style>
+<h1>✓ Gmail authorised</h1>
+${wrongAccountWarning}
+<p>Copy the refresh token below and paste it into Railway as <code>GMAIL_ACCOUNTS_REFRESH_TOKEN</code>. Railway will redeploy automatically.</p>
+<div class="warn"><b>Show this page only once</b> — treat the refresh token like a password.</div>
+<h3>GMAIL_ACCOUNTS_REFRESH_TOKEN</h3>
+<pre id="tok">${tok.refresh_token}</pre>
+<button onclick="navigator.clipboard.writeText(document.getElementById('tok').innerText);this.innerText='Copied'">Copy refresh token</button>
+<p style="margin-top:24px">Scopes granted: <code>${tok.scope}</code></p>
+<p style="margin-top:32px;color:#666">After Railway redeploys, the Follow-up button on any AR invoice will send from <code>${email}</code>.</p>`);
+    } catch (e: any) {
+      res
+        .status(500)
+        .send(`<h1>Callback error</h1><pre>${e?.message || String(e)}</pre>`);
+    }
+  });
+
   // Begin keeping the common periods warm in the background.
   startWarmer();
   // Begin the HubSpot response-cache sync schedule.
