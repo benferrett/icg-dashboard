@@ -14,6 +14,12 @@ import {
 } from "./icg/snapshot-store";
 import { hsCacheInfo, getHsSyncState } from "./icg/hs-cache";
 import { runSync, isSyncing, lastSync } from "./icg/sync";
+import { getUnpaidInvoices, getAgedDebtors, getHeadlineTotals } from "./icg/ar";
+import { markPaid, unmarkPaid, arOverridesInfo } from "./icg/ar-overrides";
+import { sendMail } from "./icg/mailer";
+import { politeReminderTemplate } from "./icg/ar-templates";
+import { buildWeeklyReport, sendWeeklyReport } from "./icg/ar-weekly";
+import { listOpenInvoices, XERO_TENANTS } from "./icg/xero";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "InnerCircle2026$$";
@@ -79,6 +85,12 @@ function revalidate(key: string, fn: () => Promise<any>) {
       const e2 = cache.get(key);
       if (e2) e2.refreshing = false;
     });
+}
+
+// Drop an entry from BOTH memory + disk (used when AR overrides mutate state
+// and we want the next read to reflect it immediately without waiting on TTL).
+function invalidate(key: string) {
+  cache.delete(key);
 }
 
 async function cached(key: string, fn: () => Promise<any>, force = false) {
@@ -396,6 +408,154 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     // Fire-and-forget; returns immediately.
     runSync(mode).catch((e) => console.error("[sync] manual failed:", e?.message));
     res.json({ started: true, mode });
+  });
+
+  // --- Accounts Receivable ------------------------------------------------
+  // Full open-AR payload — invoices + totals + aged debtors — cached via the
+  // same SWR pattern as the other tabs. TTL is the shared 5-min window (see
+  // TTL_MS above); the task originally called for 15-min, but SWR means the
+  // dashboard still serves instantly from cache and refreshes in the
+  // background, so the extra network churn from 5-min is negligible while
+  // giving "marked paid" actions faster propagation via invalidate().
+  async function buildArPayload() {
+    const { invoices, cleared } = await getUnpaidInvoices();
+    const all = [...invoices, ...cleared];
+    const totals = getHeadlineTotals(all);
+    const aged_debtors = getAgedDebtors(all);
+    return {
+      invoices,
+      cleared,
+      totals,
+      aged_debtors,
+      generated_at: new Date().toISOString(),
+    };
+  }
+
+  app.get("/api/ar/invoices", requireAuth, async (req, res) => {
+    try {
+      const force = req.query.refresh === "1";
+      const data = await cached("ar:invoices", buildArPayload, force);
+      res.json(data);
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "Failed to load AR invoices" });
+    }
+  });
+
+  app.post("/api/ar/invoices/:invoiceId/mark-paid", requireAuth, async (req, res) => {
+    try {
+      const invoiceId = String(req.params.invoiceId || "");
+      const { tenant_id, note } = (req.body || {}) as { tenant_id?: string; note?: string };
+      if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
+      const ok = markPaid(invoiceId, tenant_id, "dashboard", note);
+      if (!ok) return res.status(500).json({ error: "Override store unavailable" });
+      // Drop the cache so the next GET reflects the override immediately.
+      invalidate("ar:invoices");
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "Failed to mark paid" });
+    }
+  });
+
+  app.post("/api/ar/invoices/:invoiceId/unmark-paid", requireAuth, async (req, res) => {
+    try {
+      const invoiceId = String(req.params.invoiceId || "");
+      const ok = unmarkPaid(invoiceId);
+      if (!ok) return res.status(500).json({ error: "Override store unavailable" });
+      invalidate("ar:invoices");
+      res.json({ ok: true });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "Failed to unmark paid" });
+    }
+  });
+
+  app.post("/api/ar/invoices/:invoiceId/send-followup", requireAuth, async (req, res) => {
+    try {
+      const invoiceId = String(req.params.invoiceId || "");
+      const body = (req.body || {}) as {
+        to?: string | string[];
+        cc?: string | string[];
+        bcc?: string | string[];
+        subject?: string;
+        html?: string;
+        text?: string;
+      };
+      let { subject, html, text } = body;
+      const to = body.to;
+      if (!to) return res.status(400).json({ error: "to required" });
+
+      // If any of subject/html/text is missing, fetch this invoice fresh from
+      // Xero to render a polite reminder. We look it up across all three state
+      // tenants because the caller isn't required to know which one owns it.
+      if (!subject || !html || !text) {
+        let found: { tenant: (typeof XERO_TENANTS)[number]; invoice: Awaited<ReturnType<typeof listOpenInvoices>>[number] } | null = null;
+        for (const t of XERO_TENANTS) {
+          try {
+            const rows = await listOpenInvoices(t.id);
+            const inv = rows.find((r) => r.InvoiceID === invoiceId);
+            if (inv) {
+              found = { tenant: t, invoice: inv };
+              break;
+            }
+          } catch {
+            /* try next */
+          }
+        }
+        if (!found) return res.status(404).json({ error: "Invoice not found in any state tenant" });
+        const days_overdue = found.invoice.DueDate
+          ? Math.floor((Date.now() - found.invoice.DueDate.getTime()) / (24 * 60 * 60 * 1000))
+          : 0;
+        const tpl = politeReminderTemplate({
+          contact_name: found.invoice.Contact?.Name || null,
+          invoice_number: found.invoice.InvoiceNumber,
+          amount: found.invoice.AmountDue,
+          due_date: found.invoice.DueDate
+            ? found.invoice.DueDate.toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })
+            : "—",
+          days_overdue,
+          property: found.invoice.Reference || null,
+          tenant_name: found.tenant.name,
+        });
+        subject = subject || tpl.subject;
+        html = html || tpl.html;
+        text = text || tpl.text;
+      }
+
+      const result = await sendMail({
+        to,
+        cc: body.cc,
+        bcc: body.bcc,
+        subject: subject!,
+        html,
+        text,
+      });
+      res.json({ id: result.id, threadId: result.threadId, to, cc: body.cc, subject });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "Failed to send follow-up" });
+    }
+  });
+
+  app.post("/api/ar/weekly-report/send", requireAuth, async (req, res) => {
+    try {
+      const { to } = (req.body || {}) as { to?: string };
+      const recipient = (to && to.trim()) || "benferrett@innercirclegroup.com.au";
+      const result = await sendWeeklyReport(recipient);
+      res.json({ id: result.id, subject: result.subject, to: recipient });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "Failed to send weekly report" });
+    }
+  });
+
+  app.get("/api/ar/weekly-report/preview", requireAuth, async (_req, res) => {
+    try {
+      const rep = await buildWeeklyReport();
+      res.json({ html: rep.html_body, subject: rep.subject, totals: rep.totals });
+    } catch (e: any) {
+      res.status(500).json({ error: e?.message || "Failed to build weekly report" });
+    }
+  });
+
+  app.get("/api/ar/status", requireAuth, (_req, res) => {
+    res.json({ overrides: arOverridesInfo() });
   });
 
   // Begin keeping the common periods warm in the background.
