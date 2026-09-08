@@ -418,7 +418,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   // background, so the extra network churn from 5-min is negligible while
   // giving "marked paid" actions faster propagation via invalidate().
   async function buildArPayload() {
-    const { invoices, cleared } = await getUnpaidInvoices();
+    const { invoices, cleared, tenant_status } = await getUnpaidInvoices();
     const all = [...invoices, ...cleared];
     const totals = getHeadlineTotals(all);
     const aged_debtors = getAgedDebtors(all);
@@ -427,6 +427,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       cleared,
       totals,
       aged_debtors,
+      tenant_status,
       generated_at: new Date().toISOString(),
     };
   }
