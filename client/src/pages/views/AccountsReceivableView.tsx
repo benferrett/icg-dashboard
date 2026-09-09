@@ -175,8 +175,10 @@ export function AccountsReceivableView({ token }: { token: string }) {
 
   const [tenantFilter, setTenantFilter] = useState<string>("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [sortKey, setSortKey] = useState<SortKey>("amount");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+  // Default sort: issued date, oldest first — so the invoices that have been
+  // sitting on the aged debtors book longest surface at the top of the list.
+  const [sortKey, setSortKey] = useState<SortKey>("date");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   // Combine invoices + cleared so the UI can filter across them.
   const all = useMemo<OpenInvoice[]>(() => {
@@ -197,6 +199,12 @@ export function AccountsReceivableView({ token }: { token: string }) {
     }
     const dir = sortDir === "asc" ? 1 : -1;
     const cmp = (a: OpenInvoice, b: OpenInvoice) => {
+      // Cleared (mark-paid) rows ALWAYS sink to the bottom, no matter which
+      // column the user is sorting by — so the operator's live workload stays
+      // at the top and 'done' work is visibly out of the way.
+      const aCleared = a.bucket === "cash_received_pending" ? 1 : 0;
+      const bCleared = b.bucket === "cash_received_pending" ? 1 : 0;
+      if (aCleared !== bCleared) return aCleared - bCleared;
       switch (sortKey) {
         case "tenant":
           return a.state.localeCompare(b.state) * dir;
@@ -230,29 +238,81 @@ export function AccountsReceivableView({ token }: { token: string }) {
   }
 
   // --- Actions -----------------------------------------------------------
+  // Optimistic updates: mutate the local cache immediately so the row visibly
+  // sinks to the bottom + flips to the green Cleared badge the moment the
+  // button is clicked, instead of waiting for the next refetch. If the server
+  // rejects the write we roll back and show the error toast.
   const markPaidMut = useMutation({
     mutationFn: (inv: OpenInvoice) =>
       apiPost<{ ok: true }>(`/api/ar/invoices/${inv.invoice_id}/mark-paid`, token, {
         tenant_id: inv.tenant_id,
         note: "Marked paid from dashboard",
       }),
+    onMutate: async (inv) => {
+      await qc.cancelQueries({ queryKey: ["ar-invoices"] });
+      const prev = qc.getQueryData<ArPayload>(["ar-invoices"]);
+      if (prev) {
+        qc.setQueryData<ArPayload>(["ar-invoices"], {
+          ...prev,
+          invoices: prev.invoices.filter((r) => r.invoice_id !== inv.invoice_id),
+          cleared: [
+            ...prev.cleared,
+            { ...inv, bucket: "cash_received_pending" as ArBucket },
+          ],
+          totals: prev.totals && {
+            ...prev.totals,
+            buckets: {
+              ...prev.totals.buckets,
+              [inv.bucket]: {
+                count: Math.max(0, (prev.totals.buckets[inv.bucket]?.count || 0) - 1),
+                amount: Math.max(0, (prev.totals.buckets[inv.bucket]?.amount || 0) - inv.amount_due),
+              },
+              cash_received_pending: {
+                count: (prev.totals.buckets.cash_received_pending?.count || 0) + 1,
+                amount: (prev.totals.buckets.cash_received_pending?.amount || 0) + inv.amount_due,
+              },
+            },
+          },
+        });
+      }
+      return { prev };
+    },
     onSuccess: () => {
-      toast({ title: "Marked as paid", description: "Invoice cleared pending Xero." });
+      toast({ title: "Marked as paid", description: "Invoice moved to Cleared." });
       qc.invalidateQueries({ queryKey: ["ar-invoices"] });
     },
-    onError: (e: Error) =>
-      toast({ title: "Failed to mark paid", description: e.message, variant: "destructive" }),
+    onError: (e: Error, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["ar-invoices"], ctx.prev);
+      toast({ title: "Failed to mark paid", description: e.message, variant: "destructive" });
+    },
   });
 
   const unmarkMut = useMutation({
     mutationFn: (inv: OpenInvoice) =>
       apiPost<{ ok: true }>(`/api/ar/invoices/${inv.invoice_id}/unmark-paid`, token, {}),
+    onMutate: async (inv) => {
+      await qc.cancelQueries({ queryKey: ["ar-invoices"] });
+      const prev = qc.getQueryData<ArPayload>(["ar-invoices"]);
+      if (prev) {
+        // Restore to overdue or within_terms based on due date — best-effort;
+        // the real bucket will settle on the next refetch.
+        const restoredBucket: ArBucket = inv.is_overdue ? "overdue" : "within_terms";
+        qc.setQueryData<ArPayload>(["ar-invoices"], {
+          ...prev,
+          cleared: prev.cleared.filter((r) => r.invoice_id !== inv.invoice_id),
+          invoices: [...prev.invoices, { ...inv, bucket: restoredBucket }],
+        });
+      }
+      return { prev };
+    },
     onSuccess: () => {
       toast({ title: "Override removed", description: "Invoice is back on the follow-up list." });
       qc.invalidateQueries({ queryKey: ["ar-invoices"] });
     },
-    onError: (e: Error) =>
-      toast({ title: "Failed to unmark", description: e.message, variant: "destructive" }),
+    onError: (e: Error, _v, ctx) => {
+      if (ctx?.prev) qc.setQueryData(["ar-invoices"], ctx.prev);
+      toast({ title: "Failed to unmark", description: e.message, variant: "destructive" });
+    },
   });
 
   const weeklyMut = useMutation({
@@ -557,9 +617,32 @@ export function AccountsReceivableView({ token }: { token: string }) {
                 </tr>
               ) : (
                 filtered.map((inv) => (
-                  <tr key={inv.invoice_id} className="border-t">
+                  <tr
+                    key={inv.invoice_id}
+                    className={`border-t ${
+                      inv.bucket === "cash_received_pending"
+                        ? "bg-emerald-50/60 text-muted-foreground"
+                        : ""
+                    }`}
+                  >
                     <td className="py-2 px-3">{inv.state}</td>
-                    <td className="py-2 px-3 font-mono text-xs">{inv.invoice_number}</td>
+                    <td className="py-2 px-3 font-mono text-xs">
+                      <span className="inline-flex items-center gap-1.5">
+                        {inv.bucket === "cash_received_pending" && (
+                          <CheckCircle2
+                            className="h-3.5 w-3.5 text-emerald-600"
+                            aria-label="Marked paid"
+                          />
+                        )}
+                        <span
+                          className={
+                            inv.bucket === "cash_received_pending" ? "line-through" : ""
+                          }
+                        >
+                          {inv.invoice_number}
+                        </span>
+                      </span>
+                    </td>
                     <td className="py-2 px-3">{inv.contact_name || "—"}</td>
                     <td className="py-2 px-3 text-muted-foreground">{inv.reference || "—"}</td>
                     <td className="py-2 px-3 tabular-nums">{fmtDateShort(inv.date_iso)}</td>
