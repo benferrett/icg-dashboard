@@ -182,7 +182,7 @@ export async function sendMail(input: SendMailInput): Promise<SendMailResult> {
   if (!res.ok) {
     const txt = await res.text().catch(() => "");
     console.error(`[mailer] send failed ${res.status}: ${txt.slice(0, 400)}`);
-    throw new Error(`Gmail send failed (${res.status})`);
+    throw new Error(`Gmail send failed (${res.status}): ${txt.slice(0, 300)}`);
   }
   const json = (await res.json()) as { id: string; threadId: string };
   return { id: json.id, threadId: json.threadId };
