@@ -106,6 +106,19 @@ export function writeSnapshot(key: string, payload: any, computedAt: number): vo
   }
 }
 
+// Drop a snapshot from disk. Used after a mutation that invalidates the cache
+// — without this, deleting the in-memory entry alone still leaves the stale
+// disk snapshot, which the next request re-seeds and serves.
+export function deleteSnapshot(key: string): void {
+  init();
+  if (!db) return;
+  try {
+    db.prepare("DELETE FROM snapshots WHERE key = ?").run(key);
+  } catch (e) {
+    console.error("[snapshot-store] delete failed:", (e as any)?.message);
+  }
+}
+
 // Load every stored snapshot (used to seed the in-memory cache on boot).
 export function readAllSnapshots(): Array<{ key: string } & StoredSnapshot> {
   init();

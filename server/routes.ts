@@ -10,6 +10,7 @@ import {
   readSnapshot,
   writeSnapshot,
   readAllSnapshots,
+  deleteSnapshot,
   snapshotStoreInfo,
 } from "./icg/snapshot-store";
 import { hsCacheInfo, getHsSyncState } from "./icg/hs-cache";
@@ -98,8 +99,13 @@ function revalidate(key: string, fn: () => Promise<any>) {
 
 // Drop an entry from BOTH memory + disk (used when AR overrides mutate state
 // and we want the next read to reflect it immediately without waiting on TTL).
+// Deleting only the memory entry is not enough — the next GET re-seeds from
+// the disk snapshot, which is stale, and serves that stale snapshot via SWR
+// without triggering a rebuild. The mark-paid → "pops back up immediately" bug
+// was exactly this: memory cleared, disk snapshot re-seeded pre-mutation state.
 function invalidate(key: string) {
   cache.delete(key);
+  deleteSnapshot(key);
 }
 
 async function cached(key: string, fn: () => Promise<any>, force = false) {
