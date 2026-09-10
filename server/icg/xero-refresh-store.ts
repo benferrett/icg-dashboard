@@ -16,7 +16,31 @@
 import fs from "fs";
 import path from "path";
 
-const DATA_DIR = process.env.DATA_DIR || "/app";
+// Resolve the data directory the same way the SQLite stores do: prefer an
+// explicit DATA_DIR, then RAILWAY_VOLUME_MOUNT_PATH (set automatically when a
+// Railway volume is mounted), then process.cwd() as an ephemeral fallback.
+// Historically this file defaulted to /app which is Railway's app source dir
+// (wiped on every deploy) — mounting a volume there isn't allowed either.
+function resolveDataDir(): string {
+  const candidates: string[] = [];
+  if (process.env.DATA_DIR) candidates.push(process.env.DATA_DIR);
+  if (process.env.RAILWAY_VOLUME_MOUNT_PATH) candidates.push(process.env.RAILWAY_VOLUME_MOUNT_PATH);
+  candidates.push(process.cwd());
+  for (const dir of candidates) {
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+      const probe = path.join(dir, ".xero-refresh-write-probe");
+      fs.writeFileSync(probe, "ok");
+      fs.unlinkSync(probe);
+      return dir;
+    } catch {
+      /* try next */
+    }
+  }
+  return process.cwd();
+}
+
+const DATA_DIR = resolveDataDir();
 const STORE_PATH = path.join(DATA_DIR, "xero-refresh.json");
 
 interface Store {
