@@ -20,10 +20,13 @@ import { sendMail } from "./icg/mailer";
 import { politeReminderTemplate } from "./icg/ar-templates";
 import { buildWeeklyReport, sendWeeklyReport } from "./icg/ar-weekly";
 import { listOpenInvoices, getOnlineInvoiceUrl, XERO_TENANTS } from "./icg/xero";
+import { addSession, hasSession, deleteSession } from "./icg/session-store";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
+// Session tokens live in ./icg/session-store which persists them to disk so
+// they survive process restarts — and Railway redeploys, if a volume is
+// mounted at DATA_DIR / RAILWAY_VOLUME_MOUNT_PATH.
 const DASHBOARD_PASSWORD = process.env.DASHBOARD_PASSWORD || "InnerCircle2026$$";
-const sessions = new Set<string>();
 
 function requireAuth(req: Request, res: Response, next: NextFunction) {
   // Preferred: x-icg-token header (set by the SPA's apiGet/apiPost helpers).
@@ -33,7 +36,7 @@ function requireAuth(req: Request, res: Response, next: NextFunction) {
   const token =
     (req.headers["x-icg-token"] as string | undefined) ||
     (typeof req.query.t === "string" ? (req.query.t as string) : undefined);
-  if (token && sessions.has(token)) return next();
+  if (token && hasSession(token)) return next();
   return res.status(401).json({ error: "Unauthorized" });
 }
 
@@ -272,10 +275,18 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     const { password } = req.body || {};
     if (password === DASHBOARD_PASSWORD) {
       const token = crypto.randomBytes(24).toString("hex");
-      sessions.add(token);
+      addSession(token);
       return res.json({ token });
     }
     return res.status(401).json({ error: "Incorrect password" });
+  });
+
+  // Logout — invalidates the caller's session token so it can no longer be
+  // used. Best-effort; the client should also drop it from localStorage.
+  app.post("/api/logout", (req, res) => {
+    const token = (req.headers["x-icg-token"] as string | undefined) || "";
+    if (token) deleteSession(token);
+    res.json({ ok: true });
   });
 
   // Full dashboard (HubSpot)
