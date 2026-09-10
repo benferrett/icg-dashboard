@@ -277,9 +277,14 @@ export function AccountsReceivableView({ token }: { token: string }) {
       }
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast({ title: "Marked as paid", description: "Invoice moved to Cleared." });
-      qc.invalidateQueries({ queryKey: ["ar-invoices"] });
+      // Force a full rebuild (bypass server SWR) so the refetch reflects the
+      // override immediately. Without ?refresh=1, the server can serve a
+      // still-warming snapshot that pre-dates the mutation and the row would
+      // "pop back up" for a beat.
+      const fresh = await apiGet<ArPayload>(`/api/ar/invoices?refresh=1`, token);
+      qc.setQueryData<ArPayload>(["ar-invoices"], fresh);
     },
     onError: (e: Error, _v, ctx) => {
       if (ctx?.prev) qc.setQueryData(["ar-invoices"], ctx.prev);
@@ -305,9 +310,10 @@ export function AccountsReceivableView({ token }: { token: string }) {
       }
       return { prev };
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       toast({ title: "Override removed", description: "Invoice is back on the follow-up list." });
-      qc.invalidateQueries({ queryKey: ["ar-invoices"] });
+      const fresh = await apiGet<ArPayload>(`/api/ar/invoices?refresh=1`, token);
+      qc.setQueryData<ArPayload>(["ar-invoices"], fresh);
     },
     onError: (e: Error, _v, ctx) => {
       if (ctx?.prev) qc.setQueryData(["ar-invoices"], ctx.prev);
