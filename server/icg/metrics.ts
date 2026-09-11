@@ -1038,12 +1038,14 @@ async function membershipsSold(
       const closed = membershipDateOf(d.properties);
       if (closed && closed >= startIso && closed < endIso) {
         count++;
-        // Attribute by the deal's `strategist` field; when it is blank, fall
-        // back to the deal owner (some sold deals never got the strategist
-        // property set even though the owner is the strategist). Only count
-        // toward a strategist row when the resolved owner is a strategist, so
-        // per-strategist totals tie out to the headline sold figure.
-        const s = d.properties.strategist || d.properties.hubspot_owner_id;
+        // Attribution rule (dashboard-wide): the deal-card `strategist` field
+        // is the ONLY source of strategist credit. Deal owner is an operational
+        // routing field (e.g. Raul takes ownership after EOI paid for the
+        // contract handoff) and must NEVER be used for attribution — otherwise
+        // legitimate strategist sales get dropped when ownership rotates. If
+        // the strategist field is blank the deal is Unattributed for the
+        // per-strategist row; it still counts toward the headline figure.
+        const s = d.properties.strategist;
         const key = s && isStrategistOwner(s) ? ownerName(s) : undefined;
         if (key) byStrategist[key] = (byStrategist[key] || 0) + 1;
         soldDeals.push({
@@ -1736,12 +1738,15 @@ async function contracts(range: PeriodRange) {
   );
 
   // --- Strategist attribution -----------------------------------------------
-  // Source of truth = the deal card's `strategist` field (an owner ID). It is
-  // populated by the team on the contract record itself, so it's the most
-  // reliable signal. When that's blank we fall back to the associated CLIENT
-  // CONTACT's owner (contract deals are owned by the contract team, not the
-  // strategist), and finally to `strategist_assigned` text. The dashboard's
-  // `owner` then falls back to deal owner / "Unattributed".
+  // Source of truth = the deal card's `strategist` field (an owner ID). Deal
+  // OWNER (`hubspot_owner_id`) is deliberately NOT consulted for attribution:
+  // ownership is an operational-routing field that rotates over the deal's
+  // life (e.g. Raul Garcia takes ownership on EOI paid to run the contract
+  // handoff), so using it drops legitimate strategist credit whenever the
+  // handoff happens. The chain here is strategist field first, then associated
+  // CLIENT CONTACT owner (restricted to real strategists — never Raul or
+  // consultants), then the `strategist_assigned` text label, then activity-
+  // based inference. Deal-owner is never a fallback.
   const dealIds = deals.map((d) => d.id);
   const dealStrategist: Record<string, string> = {};
 
