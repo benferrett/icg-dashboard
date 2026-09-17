@@ -63,9 +63,15 @@ interface CacheEntry {
 }
 const cache = new Map<string, CacheEntry>();
 const TTL_MS = 5 * 60 * 1000; // a snapshot older than this is considered stale
+const ATTENDANCE_VERSION = 2;
+function currentSnapshot(key: string, data: any) {
+  return !/^(dashboard:|bizperf:|report2026:|marketing-beta:)/.test(key) ||
+    data?._attendanceVersion === ATTENDANCE_VERSION;
+}
 
 // Persist + record a freshly computed payload in both memory and on disk.
 function store(key: string, data: any, fn: () => Promise<any>, computedAt: number) {
+  data = { ...data, _attendanceVersion: ATTENDANCE_VERSION };
   cache.set(key, { data, computedAt, fn });
   writeSnapshot(key, data, computedAt);
 }
@@ -112,7 +118,7 @@ async function cached(key: string, fn: () => Promise<any>, force = false) {
   // Seed memory from disk on first touch after a restart.
   if (!cache.has(key)) {
     const disk = readSnapshot(key);
-    if (disk) cache.set(key, { data: disk.payload, computedAt: disk.computedAt, fn });
+    if (disk && currentSnapshot(key, disk.payload)) cache.set(key, { data: disk.payload, computedAt: disk.computedAt, fn });
   }
 
   const hit = cache.get(key);
@@ -216,6 +222,7 @@ function startWarmer() {
     const info = snapshotStoreInfo();
     const seeded = readAllSnapshots();
     for (const s of seeded) {
+      if (!currentSnapshot(s.key, s.payload)) continue;
       if (!cache.has(s.key)) cache.set(s.key, { data: s.payload, computedAt: s.computedAt, fn: async () => s.payload });
     }
     console.log(

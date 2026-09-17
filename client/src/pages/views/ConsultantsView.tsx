@@ -1,4 +1,5 @@
 import { Dashboard } from "@/lib/api";
+import { attendanceLabels } from "@shared/attendance";
 import { fmtNumber, fmtDateShort, fmtDuration } from "@/lib/format";
 import { Section } from "@/components/dashboard/Section";
 import { Stat } from "@/components/dashboard/Stat";
@@ -110,6 +111,13 @@ export function ConsultantsView({
           </>
         )}
       </div>
+      {!loading && d && (
+        <p className="text-sm text-muted-foreground" data-testid="consultant-attendance-quality">
+          Show-up rate = confirmed sat ÷ all scheduled clients in this period.
+          {" "}It is provisional while outcomes are awaiting confirmation or sessions are upcoming.
+          {" "}Missing CRM updates are not treated as confirmed no-shows.
+        </p>
+      )}
 
       {/* Weekly outreach coaching scorecard — deliberately placed above the
           existing consultant drill-downs so it frames the review without
@@ -238,7 +246,7 @@ export function ConsultantsView({
                       {fmtNumber(c.sats.length)} sat
                     </span>
                   </div>
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {/* Bookings made */}
                     <div className="flex flex-col gap-2">
                       <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
@@ -264,41 +272,37 @@ export function ConsultantsView({
                         </ul>
                       )}
                     </div>
-                    {/* Scheduled to be held this period — with sat/no-show mark */}
+                    {/* Server-confirmed attendance, keyed by CRM ID, not client name. */}
                     <div className="flex flex-col gap-2">
-                      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wide">
                         <CalendarClock className="h-3.5 w-3.5" />
                         Scheduled ({fmtNumber(c.scheduleds.length)})
-                        <span className="ml-auto flex items-center gap-1 normal-case">
+                        <span className="flex flex-wrap items-center gap-1 normal-case">
                           <CheckCircle2 className="h-3 w-3 text-emerald-500" />
                           sat
+                          <CalendarClock className="h-3 w-3 text-amber-600" />
+                          pending
                           <XCircle className="h-3 w-3 text-red-500" />
-                          no-show
+                          not attended
                         </span>
                       </div>
                       {c.scheduleds.length === 0 ? (
                         <span className="text-sm text-muted-foreground">—</span>
                       ) : (
                         (() => {
-                          // Match each scheduled client to the sat list (by name)
-                          // so we can show a green tick (sat) or red cross (no-show).
-                          const satNames = new Map<string, number>();
-                          for (const s of c.sats)
-                            satNames.set(
-                              s.client,
-                              (satNames.get(s.client) || 0) + 1,
-                            );
                           return (
                             <ul className="flex flex-col gap-1">
                               {c.scheduleds.map((s, i) => {
-                                const rem = satNames.get(s.client) || 0;
-                                const didSit = rem > 0;
-                                if (didSit) satNames.set(s.client, rem - 1);
+                                // Older cached payloads must fail safely to pending.
+                                const status = s.status || "awaiting_confirmation";
+                                const didSit = status === "sat";
+                                const unresolved = status === "awaiting_confirmation" || status === "upcoming";
                                 return (
                                   <li
-                                    key={`${s.client}-${i}`}
-                                    className="flex items-center justify-between gap-2 text-sm"
+                                    key={s.key || s.meetingId || `${s.client}-${i}`}
+                                    className="flex flex-col gap-1 py-1 text-sm"
                                     data-testid={`scheduled-${c.name}-${i}`}
+                                    title={s.reason}
                                   >
                                     <span className="flex items-center gap-1.5 min-w-0">
                                       {didSit ? (
@@ -306,18 +310,26 @@ export function ConsultantsView({
                                           className="h-4 w-4 shrink-0 text-emerald-500"
                                           data-testid={`sat-mark-${c.name}-${i}`}
                                         />
+                                      ) : unresolved ? (
+                                        <CalendarClock
+                                          className="h-4 w-4 shrink-0 text-amber-600"
+                                          data-testid={`pending-mark-${c.name}-${i}`}
+                                        />
                                       ) : (
                                         <XCircle
                                           className="h-4 w-4 shrink-0 text-red-500"
                                           data-testid={`noshow-mark-${c.name}-${i}`}
                                         />
                                       )}
-                                      <span className="truncate">
-                                        {s.client}
-                                      </span>
+                                      {s.url ? (
+                                        <a href={s.url} target="_blank" rel="noreferrer" className="truncate hover:underline">{s.client}</a>
+                                      ) : <span className="truncate">{s.client}</span>}
                                     </span>
-                                    <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
-                                      {fmtDateShort(s.date)}
+                                    <span className="flex flex-wrap items-center justify-between gap-1 pl-5 text-xs text-muted-foreground">
+                                      {s.evidenceUrl ? (
+                                        <a href={s.evidenceUrl} target="_blank" rel="noreferrer" className="text-emerald-700 dark:text-emerald-400 hover:underline">{attendanceLabels[status]} · reviewed evidence</a>
+                                      ) : <span>{attendanceLabels[status]}</span>}
+                                      <span className="tabular-nums">{fmtDateShort(s.date)}</span>
                                     </span>
                                   </li>
                                 );
@@ -356,7 +368,7 @@ export function ConsultantsView({
                 </Card>
               ))}
             {d.consultants.every(
-              (c) => c.bookings.length === 0 && c.sats.length === 0,
+              (c) => c.bookings.length === 0 && c.scheduleds.length === 0 && c.sats.length === 0,
             ) && (
               <div className="text-center text-muted-foreground text-sm py-6">
                 No bookings in this period.

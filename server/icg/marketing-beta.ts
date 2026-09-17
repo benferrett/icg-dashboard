@@ -26,6 +26,7 @@
 // `leadBookingByChannel` and the Overview `Total leads` card.)
 
 import { hubspot } from "./hubspot";
+import { hasReviewedSat } from "./attendance";
 import { metaAds } from "./meta";
 import {
   DISCOVERY_BOOKED_STAGE,
@@ -235,7 +236,7 @@ export async function marketingBeta(
       for (const did of deals) {
         const stage = dealProps[did]?.dealstage || "";
         if (DS_BOOKED_ANY_STAGES.has(stage)) booked = true;
-        if (DS_SAT_STAGE_SET.has(stage)) sat = true;
+        if (DS_SAT_STAGE_SET.has(stage) || hasReviewedSat(did)) sat = true;
         if (MEMBER_STAGE_SET.has(stage)) {
           member = true;
           const paid =
