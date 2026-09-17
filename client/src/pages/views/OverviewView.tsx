@@ -151,9 +151,9 @@ export function OverviewView({
                     testId="satrate-sat"
                   />
                   <Stat
-                    label={`No-shows · ${periodLabel.toLowerCase()}`}
+                    label={`Not confirmed sat · ${periodLabel.toLowerCase()}`}
                     value={fmtNumber(noShow)}
-                    sub="scheduled but not sat"
+                    sub="includes pending, upcoming and not attended"
                     testId="satrate-noshow"
                   />
                   <Stat
@@ -164,6 +164,13 @@ export function OverviewView({
                     accent
                   />
                 </div>
+                <p className="text-xs text-muted-foreground" data-testid="attendance-quality">
+                  Show-up rate remains sat ÷ scheduled. Provisional while outcomes are unresolved:
+                  {" "}{win.dsAwaitingConfirmation ?? 0} awaiting confirmation,
+                  {" "}{win.dsUpcoming ?? 0} upcoming / in progress,
+                  {" "}{win.dsNotAttended ?? 0} no-show / rescheduled / cancelled.
+                  Missing updates are not confirmed no-shows.
+                </p>
               </div>
             );
           })()

@@ -1,5 +1,7 @@
 // Aggregation logic that turns raw HubSpot deals into the dashboard's four sections.
 import { hubspot } from "./hubspot";
+import { attendanceRows, loadAttendanceContext, hasReviewedSat } from "./attendance";
+import type { AttendanceItem } from "../../shared/attendance";
 import { metaAdInsights, MetaAdRow } from "./meta";
 import {
   PeriodRange,
@@ -599,7 +601,7 @@ async function talkTimeByConsultant(startIso: string, endIso: string) {
 // sat = DS meeting that started in window, validated via an associated deal
 // sitting in any DS Sat-* stage (the meeting outcome field is unreliable and is
 // NOT used — see the sat block below for the full rationale).
-async function discoverySessions(startIso: string, endIso: string) {
+export async function discoverySessions(startIso: string, endIso: string) {
   // Fetch DS meetings that were EITHER created in the window (for `booked`) OR
   // started/held in the window (for `sat`). These two sets overlap heavily but
   // are not identical — a session booked before the window but held inside it
@@ -625,6 +627,7 @@ async function discoverySessions(startIso: string, endIso: string) {
       properties: [
         "hs_meeting_title",
         "hs_meeting_start_time",
+        "hs_meeting_end_time",
         "hs_meeting_outcome",
         "hs_createdate",
         "hubspot_owner_id",
@@ -730,6 +733,7 @@ async function discoverySessions(startIso: string, endIso: string) {
   // Shared by booking attribution AND the sat calc below (sat is validated from
   // the associated deal's pipeline stage, so we need these regardless).
   let dealAssoc: Record<string, string[]> = {};
+  let contactAssoc: Record<string, string[]> = {};
   let dealProps: Record<string, any> = {};
   // resolveBooker maps a DS meeting to the consultant who genuinely booked it
   // (or "Unattributed"). Populated once the association data is fetched; used by
@@ -742,13 +746,12 @@ async function discoverySessions(startIso: string, endIso: string) {
     const dsIds = dsMeetings.map((m) => m.id);
     const contactAssocPromise = hubspot.batchAssociations("meetings", "contacts", dsIds);
     dealAssoc = await hubspot.batchAssociations("meetings", "deals", dsIds);
-    const contactAssoc = await contactAssocPromise;
-    const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
+    contactAssoc = await contactAssocPromise;
+    const attendanceContext = await loadAttendanceContext(dsMeetings, dealAssoc, contactAssoc);
+    dealAssoc = attendanceContext.dealAssoc;
     const allContactIds = Array.from(new Set(Object.values(contactAssoc).flat()));
     const [dp, contactHist, contactSrc] = await Promise.all([
-      allDealIds.length
-        ? hubspot.batchRead("deals", allDealIds, ["booking_consultant", "hubspot_owner_id", "dealstage"])
-        : Promise.resolve({} as Record<string, any>),
+      Promise.resolve(attendanceContext.dealProps),
       allContactIds.length
         ? hubspot.batchReadWithHistory("contacts", allContactIds, ["hubspot_owner_id"])
         : Promise.resolve({} as Record<string, any>),
@@ -845,7 +848,7 @@ async function discoverySessions(startIso: string, endIso: string) {
       // Did this booked prospect eventually sit? True if ANY associated deal is
       // currently in a sat stage (stage advances once they sit / progress).
       const cohortSat = (dealAssoc[m.id] || []).some((did) =>
-        cohortSatStages.has(dealProps[did]?.dealstage),
+        cohortSatStages.has(dealProps[did]?.dealstage) || hasReviewedSat(did),
       );
       if (cohortSat) {
         bookedSatCohort += 1;
@@ -875,22 +878,10 @@ async function discoverySessions(startIso: string, endIso: string) {
   // % can't exceed 100%. We attribute each scheduled session to the booking
   // consultant using the same resolveBooker logic. scheduled = distinct keys.
   const scheduledByConsultant: Record<string, number> = {};
-  const scheduledsByConsultant: Record<string, { client: string; date: string }[]> = {};
-  const scheduledKeys = new Set<string>();
-  const schedKey = (m: any): string => {
-    const dids = dealAssoc[m.id] || [];
-    return dids.length ? `d:${dids.slice().sort()[0]}` : `m:${m.id}`;
-  };
-  for (const m of started
-    .slice()
-    .sort((a, b) =>
-      (a.properties.hs_meeting_start_time || "").localeCompare(
-        b.properties.hs_meeting_start_time || "",
-      ),
-    )) {
-    const k = schedKey(m);
-    if (scheduledKeys.has(k)) continue; // same person, 2 sessions this week
-    scheduledKeys.add(k);
+  const scheduledsByConsultant: Record<string, AttendanceItem[]> = {};
+  const rows = attendanceRows(started, dealAssoc, contactAssoc, dealProps);
+  for (const row of rows) {
+    const m = row.meeting;
     const src = sourceOfMeeting(m.id);
     if (src) bySource[src].scheduled += 1;
     const name = resolveBooker(m.id);
@@ -898,9 +889,14 @@ async function discoverySessions(startIso: string, endIso: string) {
     (scheduledsByConsultant[name] ||= []).push({
       client: clientFromTitle(m.properties.hs_meeting_title || ""),
       date: m.properties.hs_meeting_start_time || "",
+      key: row.key,
+      meetingId: m.id,
+      dealId: row.dealId,
+      url: row.dealId ? `https://app.hubspot.com/contacts/442187411/record/0-3/${row.dealId}` : undefined,
+      ...row.attendance,
     });
   }
-  const scheduled = scheduledKeys.size;
+  const scheduled = rows.length;
 
   // Sat = the number of UNIQUE PEOPLE who attended a DS in the window. Rules,
   // per Ben (ICG) — this is a core business stat and consultants are paid on it,
@@ -915,8 +911,7 @@ async function discoverySessions(startIso: string, endIso: string) {
   //  3. Dedupe by deal: if one prospect has two sessions in the window they missed
   //     the first and re-sat, which is ONE sat — so we count distinct sat deals,
   //     not raw meetings.
-  const satStages = new Set(DS_SAT_STAGES);
-  const satDealIds = new Set<string>();
+  let sat = 0;
   // Per-consultant sat: attribute each UNIQUE sat deal to the consultant who
   // booked its session, using the SAME booker resolution as booked. We attribute
   // a deal via the first started-in-window meeting it appears on, and dedupe by
@@ -936,9 +931,13 @@ async function discoverySessions(startIso: string, endIso: string) {
       if (dsDay && (!dsDayByDeal[did] || dsDay < dsDayByDeal[did])) {
         dsDayByDeal[did] = dsDay;
       }
-      if (!satStages.has(dealProps[did]?.dealstage)) continue;
-      if (satDealIds.has(did)) continue; // dedupe by deal (unique people)
-      satDealIds.add(did);
+    }
+  }
+  for (const row of rows) {
+      if (row.attendance.status !== "sat") continue;
+      const m = row.meeting;
+      const st = m.properties.hs_meeting_start_time;
+      sat++;
       const src = sourceOfMeeting(m.id);
       if (src) bySource[src].sat += 1;
       const name = resolveBooker(m.id);
@@ -949,9 +948,10 @@ async function discoverySessions(startIso: string, endIso: string) {
       });
       const strat = strategistByMeeting[m.id];
       if (strat) satByStrategist[strat] = (satByStrategist[strat] || 0) + 1;
-    }
   }
-  const sat = satDealIds.size;
+  const awaitingConfirmation = rows.filter((r) => r.attendance.status === "awaiting_confirmation").length;
+  const upcoming = rows.filter((r) => r.attendance.status === "upcoming").length;
+  const notAttended = rows.filter((r) => ["no_show_or_reschedule", "cancelled", "rescheduled"].includes(r.attendance.status)).length;
 
   // Sort each consultant's lists by date (ascending) for stable display.
   for (const k of Object.keys(bookingsByConsultant))
@@ -966,6 +966,9 @@ async function discoverySessions(startIso: string, endIso: string) {
     started: started.length,
     scheduled,
     sat,
+    awaitingConfirmation,
+    upcoming,
+    notAttended,
     bookedSat: bookedSatCohort,
     bySource,
     bookedByConsultant,
@@ -1288,6 +1291,9 @@ interface FunnelWindow {
   dsStarted: number;
   dsScheduled: number;
   dsSat: number;
+  dsAwaitingConfirmation: number;
+  dsUpcoming: number;
+  dsNotAttended: number;
   dsBookedSat: number;
   dsBySource: Record<
     "EMBR" | "META",
@@ -1333,6 +1339,9 @@ async function salesFunnel(range: PeriodRange) {
       dsStarted: ds.started,
       dsScheduled: ds.scheduled,
       dsSat: ds.sat,
+      dsAwaitingConfirmation: ds.awaitingConfirmation,
+      dsUpcoming: ds.upcoming,
+      dsNotAttended: ds.notAttended,
       dsBookedSat: ds.bookedSat,
       dsBySource: {
         EMBR: {
@@ -1397,7 +1406,7 @@ async function consultantTeam(
   bookingsByConsultant: Record<string, { client: string; date: string }[]> = {},
   satsByConsultant: Record<string, { client: string; date: string }[]> = {},
   scheduledByConsultant: Record<string, number> = {},
-  scheduledsByConsultant: Record<string, { client: string; date: string }[]> = {},
+  scheduledsByConsultant: Record<string, AttendanceItem[]> = {},
   talkTimeByConsultant: Record<string, number> = {},
 ) {
   // Memberships sold per booking consultant (deals created in the period).
@@ -2192,7 +2201,7 @@ export async function businessPerformance(granularityRaw?: string) {
     // Meetings are low-volume (well under the 10k pagination cap over a year),
     // so a plain paged search on each time filter is far faster than the
     // day-sliced searchAllByTime path.
-    const mtgProps = ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time"];
+    const mtgProps = ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time", "hs_meeting_end_time"];
     const [createdMeetings, heldMeetings] = await Promise.all([
       hubspot.searchObjects(
         "meetings",
@@ -2238,22 +2247,17 @@ export async function businessPerformance(granularityRaw?: string) {
     const dsMeetings = Object.values(byId);
     if (!dsMeetings.length) return;
     const dsIds = dsMeetings.map((m: any) => m.id);
-    const [contactAssoc, dealAssoc] = await Promise.all([
+    const [contactAssoc, directDealAssoc] = await Promise.all([
       hubspot.batchAssociations("meetings", "contacts", dsIds),
       hubspot.batchAssociations("meetings", "deals", dsIds),
     ]);
-    const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
+    const { dealAssoc, dealProps } = await loadAttendanceContext(dsMeetings, directDealAssoc, contactAssoc);
     const allContactIds = Array.from(
       new Set(Object.values(contactAssoc).flat()),
     );
-    const [dealProps, contactSrc] = await Promise.all([
-      allDealIds.length
-        ? hubspot.batchRead("deals", allDealIds, ["dealstage"])
-        : Promise.resolve({} as Record<string, any>),
-      allContactIds.length
+    const contactSrc = await (allContactIds.length
         ? hubspot.batchRead("contacts", allContactIds, BOOKING_SOURCE_PROPS)
-        : Promise.resolve({} as Record<string, any>),
-    ]);
+        : Promise.resolve({} as Record<string, any>));
     // A booking counts only if an associated contact's lead source is EMBR/META.
     const meetingIsEmbrOrMeta = (meetingId: string): boolean => {
       const cids = contactAssoc[meetingId] || [];
@@ -2285,33 +2289,14 @@ export async function businessPerformance(granularityRaw?: string) {
     // SCHEDULED: unique DS scheduled to be HELD in a bucket (bucket by the held
     // date hs_meeting_start_time), deduped by associated deal. This is the
     // show-rate denominator and counts every DS due to be held, whether or not
-    // it was ultimately sat. Restricted to EMBR/META like bookings.
-    const seenSched: Set<string>[] = buckets.map(() => new Set<string>());
-    for (const m of dsMeetings) {
-      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
-      if (bi < 0) continue;
-      if (!meetingIsEmbrOrMeta(m.id)) continue;
-      const dids = dealAssoc[m.id] || [];
-      const key = dids.length ? `d:${dids.slice().sort()[0]}` : `m:${m.id}`;
-      if (seenSched[bi].has(key)) continue;
-      seenSched[bi].add(key);
-      series.scheduled[bi]++;
-    }
-
-    // SATS: a DS is "sat" if an associated deal is in a DS_SAT_STAGES stage.
-    // Bucket by the held date (hs_meeting_start_time), dedupe by the sat deal so
-    // a deal linked to multiple meetings counts once per bucket.
-    const seenSat: Set<string>[] = buckets.map(() => new Set<string>());
-    for (const m of dsMeetings) {
-      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
-      if (bi < 0) continue;
-      for (const did of dealAssoc[m.id] || []) {
-        const stage = dealProps[did]?.dealstage;
-        if (stage && DS_SAT_STAGES.includes(stage) && !seenSat[bi].has(did)) {
-          seenSat[bi].add(did);
-          series.sats[bi]++;
-        }
-      }
+    // it was ultimately sat. All channels, matching the sat numerator.
+    // Same all-channel held-window population as Overview and Consultants.
+    for (let bi = 0; bi < buckets.length; bi++) {
+      const rows = attendanceRows(dsMeetings.filter((m) =>
+        bucketOf(parseT(m.properties.hs_meeting_start_time)) === bi),
+      dealAssoc, contactAssoc, dealProps);
+      series.scheduled[bi] = rows.length;
+      series.sats[bi] = rows.filter((r) => r.attendance.status === "sat").length;
     }
   })();
 
@@ -2668,7 +2653,7 @@ export async function monthlyReport2026(year = 2026) {
 
   // ---- DS + AM meetings ----------------------------------------------------
   const meetingsP = (async () => {
-    const mtgProps = ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time"];
+    const mtgProps = ["hs_meeting_title", "hs_createdate", "hs_meeting_start_time", "hs_meeting_end_time"];
     const [createdMeetings, heldMeetings] = await Promise.all([
       hubspot.searchObjects(
         "meetings",
@@ -2715,14 +2700,11 @@ export async function monthlyReport2026(year = 2026) {
     const relevant = Object.values(byId) as any[];
     if (!relevant.length) return;
     const ids = relevant.map((m) => m.id);
-    const [contactAssoc, dealAssoc] = await Promise.all([
+    const [contactAssoc, directDealAssoc] = await Promise.all([
       hubspot.batchAssociations("meetings", "contacts", ids),
       hubspot.batchAssociations("meetings", "deals", ids),
     ]);
-    const allDealIds = Array.from(new Set(Object.values(dealAssoc).flat()));
-    const dealProps = allDealIds.length
-      ? await hubspot.batchRead("deals", allDealIds, ["dealstage"])
-      : ({} as Record<string, any>);
+    const { dealAssoc, dealProps } = await loadAttendanceContext(relevant.filter(isDs), directDealAssoc, contactAssoc);
 
     const dsMeetings = relevant.filter(isDs);
     const amMeetings = relevant.filter(isAm);
@@ -2745,29 +2727,12 @@ export async function monthlyReport2026(year = 2026) {
     }
 
     // DS SCHEDULED: unique DS to be HELD in a bucket, deduped by deal.
-    const seenSched: Set<string>[] = buckets.map(() => new Set<string>());
-    for (const m of dsMeetings) {
-      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
-      if (bi < 0) continue;
-      const dids = dealAssoc[m.id] || [];
-      const key = dids.length ? `d:${dids.slice().sort()[0]}` : `m:${m.id}`;
-      if (seenSched[bi].has(key)) continue;
-      seenSched[bi].add(key);
-      series.dsScheduled[bi]++;
-    }
-
-    // DS SAT: DS held in a bucket whose associated deal is in a DS Sat-* stage.
-    const seenSat: Set<string>[] = buckets.map(() => new Set<string>());
-    for (const m of dsMeetings) {
-      const bi = bucketOf(parseT(m.properties.hs_meeting_start_time));
-      if (bi < 0) continue;
-      for (const did of dealAssoc[m.id] || []) {
-        const stage = dealProps[did]?.dealstage;
-        if (stage && DS_SAT_STAGES.includes(stage) && !seenSat[bi].has(did)) {
-          seenSat[bi].add(did);
-          series.dsSat[bi]++;
-        }
-      }
+    for (let bi = 0; bi < buckets.length; bi++) {
+      const rows = attendanceRows(dsMeetings.filter((m) =>
+        bucketOf(parseT(m.properties.hs_meeting_start_time)) === bi),
+      dealAssoc, contactAssoc, dealProps);
+      series.dsScheduled[bi] = rows.length;
+      series.dsSat[bi] = rows.filter((r) => r.attendance.status === "sat").length;
     }
 
     // AM SAT: Portfolio Acquisition Meetings held in a bucket, deduped by the

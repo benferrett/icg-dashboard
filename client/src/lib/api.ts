@@ -117,7 +117,7 @@ export interface Dashboard {
     sold: number;
     talkMs: number;
     bookings: { client: string; date: string }[];
-    scheduleds: { client: string; date: string }[];
+    scheduleds: import("@shared/attendance").AttendanceItem[];
     sats: { client: string; date: string }[];
   }[];
   consultantScorecard: ConsultantScorecard;
@@ -288,6 +288,9 @@ export interface FunnelWindow {
   dsStarted: number;
   dsScheduled: number;
   dsSat: number;
+  dsAwaitingConfirmation?: number;
+  dsUpcoming?: number;
+  dsNotAttended?: number;
   dsBookedSat: number;
   dsBySource: Record<
     "EMBR" | "META",

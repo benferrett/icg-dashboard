@@ -154,7 +154,7 @@ export function MarketingView({
               <Stat
                 label="DS sat"
                 value={fmtNumber(sat)}
-                sub={`${fmtNumber(noShow)} no-show`}
+                sub={`${fmtNumber(noShow)} not confirmed sat`}
                 testId="src-sat"
               />
             </div>
@@ -178,6 +178,7 @@ export function MarketingView({
             </div>
 
             <p className="text-xs text-muted-foreground">
+              Outcomes may still be awaiting confirmation or upcoming; not confirmed sat does not mean no-show.
               Show rate = of the DS scheduled to be held this period, the share
               that showed up. Conversion to membership = memberships sold ÷ DS
               sat for the selected lead source.
