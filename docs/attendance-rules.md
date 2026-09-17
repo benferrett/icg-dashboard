@@ -69,9 +69,11 @@ dates, memberships, accounts receivable and commission rules are not modified.
   association logic counted 4 sat; corrected logic counts 6 sat, 1 awaiting
   confirmation, 1 cancelled, 1 rescheduled and 2 no-show/to-reschedule. This is an
   audited sample, not a claim that all historical outcomes have been reviewed.
-- Production build passes. The full TypeScript check still reports the same 10
-  baseline errors: missing refund types, a duplicate owner-map key, iterator
-  target settings and optional forecast dates. No new errors introduced.
+- Production build passes. After rebasing onto the latest production update
+  (Patrick Nong reporting, PR #23), all three Patrick regression tests also pass.
+  The full TypeScript check reports nine remaining baseline errors: missing
+  refund types, iterator target settings and optional forecast dates. PR #23
+  already removed the duplicate owner-map key. No new errors introduced.
 - Browser QA of the actual Overview, Consultants and Marketing components with
   synthetic data: 1440px and 375px widths, no document overflow or page errors.
   Verified 55% display, six green sat marks, one amber pending mark, four explicit
