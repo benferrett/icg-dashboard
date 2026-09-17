@@ -85,6 +85,7 @@ export const SCORECARD_ROSTER: readonly string[] = [
   "Akhil Venugopal",
   "Steven Green",
   "Mitchell Saxton",
+  "Patrick Nong",
 ];
 
 // The full attribution roster supports the contact query; returned scorecard
@@ -94,6 +95,7 @@ const ROSTER: Array<{ name: string; role: ScorecardRole; ownerIds: string[] }> =
   { name: "Moses Emmanuel", role: "Booker", ownerIds: ["363808537", "363811156"] },
   { name: "Akhil Venugopal", role: "Booker", ownerIds: ["362495114"] },
   { name: "Mitchell Saxton", role: "Booker", ownerIds: ["366721097"] },
+  { name: "Patrick Nong", role: "Booker", ownerIds: ["367581062"] },
   { name: "Ben Ferrett", role: "Strategist", ownerIds: ["361455466"] },
   { name: "Renee O'Connell", role: "Strategist", ownerIds: ["363222039"] },
   { name: "Patrick Van Orsouw", role: "Strategist", ownerIds: ["362352488"] },
@@ -123,13 +125,13 @@ export const OWNER_MAP: Record<string, string> = {
   "362741341": "Steven Green",
   "362495114": "Akhil Venugopal",
   "366721097": "Mitchell Saxton",
+  "367581062": "Patrick Nong",
   "363222039": "Renee O'Connell",
   "361455466": "Ben Ferrett",
   "364595873": "Jean-Jerome Vacher",
   // Existing legacy owners remain supported.
   "363808537": "Moses Emmanuel",
   "361919740": "Steven Mau",
-  "366721097": "Mitchell Saxton",
   // 82710130 is the legacy/admin owner — do NOT map to a consultant.
 };
 
@@ -144,6 +146,9 @@ const AIRCALL_LINE_MAP: Record<string, string> = {
   mitchell: "Mitchell Saxton",
   mitch: "Mitchell Saxton",
   "ben ferrett": "Ben Ferrett",
+  // Specific names must precede the legacy first-name-only Patrick alias.
+  "patrick nong": "Patrick Nong",
+  patty: "Patrick Nong",
   patrick: "Patrick Van Orsouw",
   renee: "Renee O'Connell",
   "steve mau": "Steven Mau",

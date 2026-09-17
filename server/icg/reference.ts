@@ -25,6 +25,7 @@ export const OWNERS: Record<string, string> = {
   "363811156": "Moses Emmanuel",
   "364595873": "Raul Garcia",
   "366721097": "Mitchell Saxton",
+  "367581062": "Patrick Nong",
 };
 
 export function ownerName(id?: string | null): string {
@@ -154,6 +155,7 @@ export const BOOKING_CONSULTANTS: Record<string, string> = {
   "362495114": "Akhil Venugopal",
   "361455466": "Ben Houghton",
   "366721097": "Mitchell Saxton",
+  "367581062": "Patrick Nong",
 };
 
 // True only for the booking-consultant team. Used to attribute a DS booking to
