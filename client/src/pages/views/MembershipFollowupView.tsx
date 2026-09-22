@@ -619,7 +619,7 @@ export default function MembershipFollowupView({ token }: { token: string }) {
                   title="Follow-up preview"
                   srcDoc={preview.html}
                   sandbox=""
-                  className="w-full h-[520px]"
+                  className="w-full h-[520px] bg-white"
                 />
               </div>
             </div>
