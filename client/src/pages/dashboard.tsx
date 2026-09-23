@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { queryClient } from "@/lib/queryClient";
 import { apiGet, Dashboard, MetaData, PeriodKey, PERIOD_OPTIONS } from "@/lib/api";
 import { timeAgo } from "@/lib/format";
 import { Logo } from "@/components/dashboard/Logo";
@@ -43,6 +44,7 @@ import { FunnelPerformanceView } from "./views/FunnelPerformanceView";
 import { Report2026View } from "./views/Report2026View";
 import { ForecastingView } from "./views/ForecastingView";
 import { AccountsReceivableView } from "./views/AccountsReceivableView";
+import { MembershipPaymentsView } from "./views/MembershipPaymentsView";
 
 type TabKey =
   | "overview"
@@ -55,7 +57,8 @@ type TabKey =
   | "business"
   | "report2026"
   | "forecasting"
-  | "accounts_receivable";
+  | "accounts_receivable"
+  | "membership_payments";
 
 // Tabs that own their own data window and therefore have no date/range picker.
 // Marketing BETA owns its own month picker inside the view.
@@ -66,6 +69,7 @@ const SELF_WINDOWED_TABS: TabKey[] = [
   "forecasting",
   "marketing_beta",
   "accounts_receivable",
+  "membership_payments",
 ];
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
@@ -92,6 +96,7 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
     label: "Accounts Receivable",
     icon: <Receipt className="h-4 w-4" />,
   },
+  { key: "membership_payments", label: "Membership Payments", icon: <Receipt className="h-4 w-4" /> },
 ];
 
 function useDarkMode() {
@@ -118,7 +123,10 @@ export default function DashboardPage({
   // When the user picks a custom calendar range, `custom` is set and takes
   // priority over `period`. Selecting a preset clears it.
   const [custom, setCustom] = useState<CustomRange | null>(null);
-  const [tab, setTab] = useState<TabKey>("overview");
+  const [tab, setTab] = useState<TabKey>(() =>
+    new URLSearchParams(window.location.search).get("tab") === "membership_payments"
+      ? "membership_payments" : "overview",
+  );
   const [navOpen, setNavOpen] = useState(false);
 
   // Business is the only tab with no range control (it uses rolling trend
@@ -136,6 +144,7 @@ export default function DashboardPage({
   const rangeKey = custom ? `custom:${custom.start}:${custom.end}` : period;
 
   const dash = useQuery<Dashboard>({
+    enabled: tab !== "membership_payments",
     queryKey: ["/api/dashboard", rangeKey],
     queryFn: () => apiGet<Dashboard>(`/api/dashboard?${rangeQS}`, token),
     // While the backend is refreshing a stale snapshot in the background, poll
@@ -144,6 +153,7 @@ export default function DashboardPage({
       (q.state.data as Dashboard | undefined)?.updating ? 4000 : false,
   });
   const meta = useQuery<MetaData>({
+    enabled: tab !== "membership_payments",
     queryKey: ["/api/meta", rangeKey],
     queryFn: () => apiGet<MetaData>(`/api/meta?${rangeQS}`, token),
   });
@@ -159,6 +169,18 @@ export default function DashboardPage({
 
   async function refresh() {
     setRefreshing(true);
+    if (tab === "membership_payments") {
+      try {
+        await Promise.all([
+          queryClient.invalidateQueries({ queryKey: ["/api/membership-balance-email/candidates"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/membership-payment-followup/candidates"] }),
+          queryClient.invalidateQueries({ queryKey: ["/api/membership-xero/status"] }),
+        ]);
+      } finally {
+        setRefreshing(false);
+      }
+      return;
+    }
     await Promise.all([
       apiGet(`/api/dashboard?${rangeQS}&refresh=1`, token).catch(() => {}),
       apiGet(`/api/meta?${rangeQS}&refresh=1`, token).catch(() => {}),
@@ -231,7 +253,9 @@ export default function DashboardPage({
               onSelectCustom={(r) => setCustom(r)}
             />
           )}
-          {d?.updating ? (
+          {tab === "membership_payments" ? (
+            <span className="hidden md:inline text-xs text-muted-foreground">Membership worklists</span>
+          ) : d?.updating ? (
             <span
               className="hidden md:inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
               data-testid="status-updating"
@@ -299,7 +323,7 @@ export default function DashboardPage({
             )}
           </div>
 
-          {dash.error && (dash.error as Error).message !== "UNAUTHORIZED" && (
+          {tab !== "membership_payments" && dash.error && (dash.error as Error).message !== "UNAUTHORIZED" && (
             <Card className="mb-6 p-4 border-destructive/40 flex items-center gap-3">
               <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
               <div className="text-sm">
@@ -352,6 +376,7 @@ export default function DashboardPage({
           {tab === "report2026" && <Report2026View token={token} />}
           {tab === "forecasting" && <ForecastingView token={token} />}
           {tab === "accounts_receivable" && <AccountsReceivableView token={token} />}
+          {tab === "membership_payments" && <MembershipPaymentsView token={token} />}
 
           <footer className="text-center text-xs text-muted-foreground pt-8 pb-4">
             Live data from HubSpot &amp; Meta · cached up to 5 min · Inner Circle Group

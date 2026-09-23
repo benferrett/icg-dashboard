@@ -22,6 +22,7 @@ import { politeReminderTemplate } from "./icg/ar-templates";
 import { buildWeeklyReport, sendWeeklyReport } from "./icg/ar-weekly";
 import { listOpenInvoices, getOnlineInvoiceUrl, XERO_TENANTS } from "./icg/xero";
 import { addSession, hasSession, deleteSession } from "./icg/session-store";
+import { registerMembershipRoutes } from "./icg/membership";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
 // Session tokens live in ./icg/session-store which persists them to disk so
@@ -283,6 +284,7 @@ function startSync() {
 }
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
+  registerMembershipRoutes(app, requireAuth);
   // Login -> returns a session token
   app.post("/api/login", (req, res) => {
     const { password } = req.body || {};

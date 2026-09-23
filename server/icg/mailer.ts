@@ -7,12 +7,14 @@
 //
 // SEND: builds an RFC 5322 message (multipart/alternative when both HTML and
 // text are present), base64url-encodes it, and POSTs to Gmail's
-// `users.messages.send`. Gmail infers the `From:` header from the authenticated
+// `users.messages.send` targeting the accounts mailbox. Gmail infers the `From:` header from the authenticated
 // mailbox, but we ALWAYS set it explicitly with the friendly display name so
 // the recipient sees "Inner Circle Group Accounts".
 
 const TOKEN_URL = "https://oauth2.googleapis.com/token";
-const SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
+// Target the actual mailbox, not "me": credentials for a different account
+// must fail rather than silently creating the Sent item in that other mailbox.
+const SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/accounts%40innercirclegroup.com.au/messages/send";
 
 const FROM_HEADER = "Inner Circle Group Accounts <accounts@innercirclegroup.com.au>";
 
