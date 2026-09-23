@@ -4,7 +4,9 @@
 
 Dashboard → Membership Payments → Payment follow-up → Link Xero payment.
 
-Search by client, payment reference, invoice number or amount, with an adjustable date range. Select a receipt, review its organisation, date and amount, confirm that it belongs to the member, then choose **Link payment and mark paid** or **Link part payment**.
+The picker only lists receipts whose amount exactly matches the remaining balance, compared in cents. For an original $6,000 balance with $1,000 already linked, only $5,000 receipts are listed. Existing partial links remain recorded; new smaller or larger receipts are not offered in this picker.
+
+Search within those amount-matched receipts by client, payment reference, invoice number or amount, with an adjustable date range. Select a receipt, review its organisation, date and amount, confirm that it belongs to the member, then choose **Link payment and mark paid**. Amount matching does not bypass the ownership, currency or duplicate safeguards.
 
 The feature links existing Xero records to the dashboard only. It does not create payments, reconcile bank-feed lines, modify invoices or write anything to Xero. The source is the existing membership connection to Inner Circle Group Pty Ltd.
 
