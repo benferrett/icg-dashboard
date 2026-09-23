@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { matchesOutstandingAmount } from "@shared/membership-receipts";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Loader2, Search } from "lucide-react";
 import { membershipApi } from "@/lib/membership-api";
@@ -62,14 +63,19 @@ export function MembershipXeroPaymentDialog({ token, member, onClose, onLinked }
   });
   const options = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (receipts.data?.payments ?? []).filter(p =>
+    return (receipts.data?.payments ?? [])
+      .filter(p => matchesOutstandingAmount(p.amount, receipts.data?.remainingToLink ?? 0))
+      .filter(p =>
       !q || `${p.contactName} ${p.reference} ${p.invoiceNumber ?? ""} ${p.amount} ${p.id}`.toLowerCase().includes(q));
   },[receipts.data,search]);
+  const selectedMatchesBalance = !!selected &&
+    matchesOutstandingAmount(selected.amount, receipts.data?.remainingToLink ?? 0);
   const apply = Math.min(selected?.amount ?? 0,receipts.data?.remainingToLink ?? 0);
   const remaining = Math.max(0,Math.round(((receipts.data?.remainingToLink ?? 0)-apply)*100)/100);
   const mutation = useMutation({
     mutationFn:async () => {
-      if (!selected || !receipts.data || !confirmed) throw new Error("Choose and confirm a receipt first");
+      if (!selected || !receipts.data || !confirmed || !selectedMatchesBalance)
+        throw new Error("Choose and confirm a receipt matching the outstanding balance");
       return (await api("POST","/api/membership-payment-followup/link-xero-payment", {
         dealId:member.dealId,tenantId:receipts.data.tenantId,
         source:selected.source,paymentId:selected.id,confirmed:true,
@@ -97,7 +103,7 @@ export function MembershipXeroPaymentDialog({ token, member, onClose, onLinked }
             <div className="space-y-1"><Label htmlFor="xero-until">To</Label><Input id="xero-until" type="date" value={until} disabled={mutation.isPending} onChange={e=>changeDates("until",e.target.value)} /></div>
           </div>
           <div className="space-y-1">
-            <Label htmlFor="xero-search">Search receipts</Label>
+            <Label htmlFor="xero-search">Search matching receipts</Label>
             <div className="relative">
               <Search className="absolute left-3 top-3 size-4 text-muted-foreground" />
               <Input id="xero-search" className="pl-9" placeholder="Name, reference, invoice or amount" value={search} onChange={e=>setSearch(e.target.value)} />
@@ -113,6 +119,7 @@ export function MembershipXeroPaymentDialog({ token, member, onClose, onLinked }
             <>
               <p className="text-xs text-muted-foreground">
                 {receipts.data.tenantName} · {aud(receipts.data.remainingToLink)} left to link.
+                {" "}Showing only payments of exactly {aud(receipts.data.remainingToLink)}.
                 Authorised invoice payments and recorded receive-money transactions only, not raw bank-feed lines.
               </p>
               <div className="space-y-2 max-h-64 overflow-y-auto" role="radiogroup" aria-label="Xero receipts">
@@ -133,7 +140,9 @@ export function MembershipXeroPaymentDialog({ token, member, onClose, onLinked }
                     </button>
                   );
                 })}
-                {!options.length && !receipts.isFetching && <p className="text-sm text-muted-foreground p-3">No matching receipts in this date range. Try a different reference or wider dates.</p>}
+                {!options.length && !receipts.isFetching && <p className="text-sm text-muted-foreground p-3">
+                  No receipts for exactly {aud(receipts.data.remainingToLink)} match this date range and search. Try wider dates or clear the search.
+                </p>}
               </div>
             </>
           )}
@@ -153,7 +162,7 @@ export function MembershipXeroPaymentDialog({ token, member, onClose, onLinked }
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
-          <Button data-testid="button-confirm-xero-link" onClick={()=>mutation.mutate()} disabled={!selected || !confirmed || apply<=0 || mutation.isPending || receipts.isFetching || !!receipts.error}>
+          <Button data-testid="button-confirm-xero-link" onClick={()=>mutation.mutate()} disabled={!selectedMatchesBalance || !confirmed || apply<=0 || mutation.isPending || receipts.isFetching || !!receipts.error}>
             {mutation.isPending && <Loader2 className="size-4 mr-2 animate-spin" />}
             {remaining === 0 ? "Link payment and mark paid" : "Link part payment"}
           </Button>
