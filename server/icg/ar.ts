@@ -24,6 +24,8 @@ import {
   type XeroTenant,
 } from "./xero";
 import { listOverrides, type InvoiceOverride } from "./ar-overrides";
+import { arReceiptLinks, checkArReceiptLink } from "./ar-receipts";
+import type { ArReceiptEvidence } from "../../shared/ar-receipts";
 
 export type ArBucket =
   | "overdue"
@@ -48,6 +50,7 @@ export interface OpenInvoice {
   days_overdue: number; // negative when still within terms
   is_overdue: boolean;
   bucket: ArBucket;
+  receipt_evidence?: ArReceiptEvidence;
   override?: {
     marked_paid_at_iso: string;
     marked_by: string | null;
@@ -140,8 +143,9 @@ export interface TenantFetchStatus {
 }
 
 // Fetch + normalise open AR across all three state entities.
-export async function getUnpaidInvoices(): Promise<UnpaidInvoicesResult & { tenant_status: TenantFetchStatus[] }> {
+export async function getUnpaidInvoices(fetchInvoices= listOpenInvoices, verifyLink=checkArReceiptLink): Promise<UnpaidInvoicesResult & { tenant_status: TenantFetchStatus[] }> {
   const overrides = listOverrides();
+  const links = arReceiptLinks();
   const now = new Date();
 
   // Fan out to all three tenants in parallel; on a per-tenant failure we log,
@@ -151,7 +155,7 @@ export async function getUnpaidInvoices(): Promise<UnpaidInvoicesResult & { tena
   const perTenant = await Promise.all(
     XERO_TENANTS.map(async (t: XeroTenant): Promise<{ tenant: XeroTenant; rows: XeroInvoice[]; status: TenantFetchStatus }> => {
       try {
-        const rows = await listOpenInvoices(t.id);
+        const rows = await fetchInvoices(t.id);
         return {
           tenant: t,
           rows,
@@ -215,7 +219,14 @@ export async function getUnpaidInvoices(): Promise<UnpaidInvoicesResult & { tena
           }
         : undefined,
     };
-    if (override?.marked_paid_at) cleared.push(norm);
+    const link = links.find(l=>l.invoiceTenantId===tenant.id && l.invoiceId===raw.InvoiceID);
+    if (link) {
+      norm.receipt_evidence = await verifyLink(link);
+      // An outage does not silently discard saved evidence. Invalid/reversed
+      // receipts return to review, but reminders stay blocked while linked.
+      if (norm.receipt_evidence.verification !== "invalid") norm.bucket = "cash_received_pending";
+    }
+    if (norm.bucket === "cash_received_pending") cleared.push(norm);
     else active.push(norm);
   }
 

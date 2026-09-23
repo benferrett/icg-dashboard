@@ -123,10 +123,10 @@ export default function DashboardPage({
   // When the user picks a custom calendar range, `custom` is set and takes
   // priority over `period`. Selecting a preset clears it.
   const [custom, setCustom] = useState<CustomRange | null>(null);
-  const [tab, setTab] = useState<TabKey>(() =>
-    new URLSearchParams(window.location.search).get("tab") === "membership_payments"
-      ? "membership_payments" : "overview",
-  );
+  const [tab, setTab] = useState<TabKey>(() => {
+    const requested = new URLSearchParams(window.location.search).get("tab");
+    return TABS.some(t=>t.key===requested) ? requested as TabKey : "overview";
+  });
   const [navOpen, setNavOpen] = useState(false);
 
   // Business is the only tab with no range control (it uses rolling trend
@@ -144,7 +144,7 @@ export default function DashboardPage({
   const rangeKey = custom ? `custom:${custom.start}:${custom.end}` : period;
 
   const dash = useQuery<Dashboard>({
-    enabled: tab !== "membership_payments",
+    enabled: tab !== "membership_payments" && tab !== "accounts_receivable",
     queryKey: ["/api/dashboard", rangeKey],
     queryFn: () => apiGet<Dashboard>(`/api/dashboard?${rangeQS}`, token),
     // While the backend is refreshing a stale snapshot in the background, poll
@@ -153,7 +153,7 @@ export default function DashboardPage({
       (q.state.data as Dashboard | undefined)?.updating ? 4000 : false,
   });
   const meta = useQuery<MetaData>({
-    enabled: tab !== "membership_payments",
+    enabled: tab !== "membership_payments" && tab !== "accounts_receivable",
     queryKey: ["/api/meta", rangeKey],
     queryFn: () => apiGet<MetaData>(`/api/meta?${rangeQS}`, token),
   });
@@ -169,6 +169,16 @@ export default function DashboardPage({
 
   async function refresh() {
     setRefreshing(true);
+    if (tab === "accounts_receivable") {
+      try {
+        const fresh = await apiGet("/api/ar/invoices?refresh=1", token);
+        queryClient.setQueryData(["ar-invoices"], fresh);
+        await queryClient.invalidateQueries({queryKey:["ar-receipts"]});
+      } catch {
+        await queryClient.invalidateQueries({queryKey:["ar-invoices"]});
+      } finally { setRefreshing(false); }
+      return;
+    }
     if (tab === "membership_payments") {
       try {
         await Promise.all([
@@ -255,6 +265,8 @@ export default function DashboardPage({
           )}
           {tab === "membership_payments" ? (
             <span className="hidden md:inline text-xs text-muted-foreground">Membership worklists</span>
+          ) : tab === "accounts_receivable" ? (
+            <span className="hidden md:inline text-xs text-muted-foreground">Commission receivables</span>
           ) : d?.updating ? (
             <span
               className="hidden md:inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"

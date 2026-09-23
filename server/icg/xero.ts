@@ -45,6 +45,7 @@ interface AccessToken {
   expiresAt: number; // epoch ms
 }
 let cachedToken: AccessToken | null = null;
+let refreshInFlight: Promise<AccessToken> | null = null;
 const TOKEN_URL = "https://identity.xero.com/connect/token";
 const XERO_BASE = "https://api.xero.com";
 
@@ -142,7 +143,10 @@ async function getAccessToken(force = false): Promise<string> {
   if (!force && cachedToken && cachedToken.expiresAt - now > 2 * 60 * 1000) {
     return cachedToken.token;
   }
-  const t = await refreshAccessToken();
+  // Parallel invoice/receipt reads must share one refresh because Xero
+  // rotates refresh tokens. Concurrent exchanges can invalidate the grant.
+  if (!refreshInFlight) refreshInFlight = refreshAccessToken().finally(()=>{refreshInFlight=null;});
+  const t = await refreshInFlight;
   return t.token;
 }
 
@@ -233,19 +237,29 @@ export interface XeroInvoice {
   Reference?: string;
   Status?: string;
   Type?: string;
+  CurrencyCode?: string;
 }
 
 // GET open AR invoices for a tenant (AUTHORISED + Type=ACCREC).
 export async function listOpenInvoices(tenantId: string): Promise<XeroInvoice[]> {
-  const json = await xeroGet<any>(tenantId, "/api.xro/2.0/Invoices", {
+  const rows: any[] = [];
+  for (let page = 1; page <= 100; page++) {
+    const json = await xeroGet<any>(tenantId, "/api.xro/2.0/Invoices", {
     Statuses: "AUTHORISED",
-    Type: "ACCREC",
+    where: 'Type=="ACCREC"',
     // Include LineItems so callers can extract a property reference if we don't
     // find one in the Reference field. Xero's default omits line detail on list.
-    page: 1,
-  });
-  const rows: any[] = json?.Invoices || [];
-  return rows.map((r): XeroInvoice => ({
+    page, pageSize: 100,
+    });
+    if (!Array.isArray(json?.Invoices)) throw new Error("Invalid Xero invoice response");
+    rows.push(...json.Invoices.filter((r: any) => r.Type === "ACCREC" && r.Status === "AUTHORISED"));
+    if (json.Invoices.length < 100) return rows.map(normaliseInvoice);
+  }
+  throw new Error("Invoice results exceed the safe page limit");
+}
+
+export function normaliseInvoice(r: any): XeroInvoice {
+  return {
     InvoiceID: r.InvoiceID,
     InvoiceNumber: r.InvoiceNumber ?? "",
     Contact: {
@@ -261,7 +275,8 @@ export async function listOpenInvoices(tenantId: string): Promise<XeroInvoice[]>
     Reference: r.Reference || undefined,
     Status: r.Status,
     Type: r.Type,
-  }));
+    CurrencyCode: r.CurrencyCode,
+  };
 }
 
 // Full contact record. We use this to enrich each invoice with the vendor's

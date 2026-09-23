@@ -22,7 +22,9 @@ import { politeReminderTemplate } from "./icg/ar-templates";
 import { buildWeeklyReport, sendWeeklyReport } from "./icg/ar-weekly";
 import { listOpenInvoices, getOnlineInvoiceUrl, XERO_TENANTS } from "./icg/xero";
 import { addSession, hasSession, deleteSession } from "./icg/session-store";
-import { registerMembershipRoutes } from "./icg/membership";
+import { registerMembershipRoutes, membershipRecipients, ACCOUNTS } from "./icg/membership";
+import { arReceiptLinks, assertArFollowupAllowed, findArReceiptLink, registerArReceiptRoutes } from "./icg/ar-receipts";
+import { matchesOutstandingAmount } from "../shared/membership-receipts";
 
 // --- Simple session-token auth (no cookies/localStorage; token returned to client) ---
 // Session tokens live in ./icg/session-store which persists them to disk so
@@ -63,9 +65,11 @@ interface CacheEntry {
   refreshing?: boolean; // a background revalidation is already in flight
 }
 const cache = new Map<string, CacheEntry>();
+const cacheGenerations = new Map<string, number>();
 const TTL_MS = 5 * 60 * 1000; // a snapshot older than this is considered stale
 const ATTENDANCE_VERSION = 2;
 function currentSnapshot(key: string, data: any) {
+  if (key === "ar:invoices") return data?._arReceiptVersion === 1;
   return !/^(dashboard:|bizperf:|report2026:|marketing-beta:)/.test(key) ||
     data?._attendanceVersion === ATTENDANCE_VERSION;
 }
@@ -94,9 +98,12 @@ function withMeta(data: any, computedAt: number, updating: boolean) {
 function revalidate(key: string, fn: () => Promise<any>) {
   const entry = cache.get(key);
   if (entry?.refreshing) return; // don't stampede
+  const generation = cacheGenerations.get(key) || 0;
   if (entry) entry.refreshing = true;
   fn()
-    .then((data) => store(key, data, fn, Date.now()))
+    .then((data) => {
+      if ((cacheGenerations.get(key) || 0) === generation) store(key, data, fn, Date.now());
+    })
     .catch((e) => console.error(`[revalidate] ${key} failed:`, (e as any)?.message))
     .finally(() => {
       const e2 = cache.get(key);
@@ -111,11 +118,13 @@ function revalidate(key: string, fn: () => Promise<any>) {
 // without triggering a rebuild. The mark-paid → "pops back up immediately" bug
 // was exactly this: memory cleared, disk snapshot re-seeded pre-mutation state.
 function invalidate(key: string) {
+  cacheGenerations.set(key, (cacheGenerations.get(key) || 0) + 1);
   cache.delete(key);
   deleteSnapshot(key);
 }
 
 async function cached(key: string, fn: () => Promise<any>, force = false) {
+  const generation = cacheGenerations.get(key) || 0;
   // Seed memory from disk on first touch after a restart.
   if (!cache.has(key)) {
     const disk = readSnapshot(key);
@@ -131,6 +140,7 @@ async function cached(key: string, fn: () => Promise<any>, force = false) {
   // Forced refresh (refresh=1): block on a fresh rebuild.
   if (force) {
     const data = await fn();
+    if ((cacheGenerations.get(key) || 0) !== generation) return cached(key, fn, true);
     store(key, data, fn, Date.now());
     return withMeta(data, Date.now(), false);
   }
@@ -145,6 +155,7 @@ async function cached(key: string, fn: () => Promise<any>, force = false) {
 
   // Cold: nothing anywhere. Must block on the first live fetch.
   const data = await fn();
+  if ((cacheGenerations.get(key) || 0) !== generation) return cached(key, fn, true);
   store(key, data, fn, Date.now());
   return { ...data, cached: false, computedAt: new Date().toISOString(), cacheAgeSec: 0, stale: false, updating: false };
 }
@@ -285,6 +296,7 @@ function startSync() {
 
 export async function registerRoutes(httpServer: Server, app: Express): Promise<Server> {
   registerMembershipRoutes(app, requireAuth);
+  registerArReceiptRoutes(app, requireAuth, () => invalidate("ar:invoices"));
   // Login -> returns a session token
   app.post("/api/login", (req, res) => {
     const { password } = req.body || {};
@@ -457,6 +469,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
     return {
       invoices,
       cleared,
+      receipt_history: arReceiptLinks(true),
+      _arReceiptVersion: 1,
       totals,
       aged_debtors,
       tenant_status,
@@ -479,6 +493,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       const invoiceId = String(req.params.invoiceId || "");
       const { tenant_id, note } = (req.body || {}) as { tenant_id?: string; note?: string };
       if (!tenant_id) return res.status(400).json({ error: "tenant_id required" });
+      if (findArReceiptLink(tenant_id,invoiceId)) return res.status(409).json({error:"Remove the receipt link before applying a separate manual override"});
       const ok = markPaid(invoiceId, tenant_id, "dashboard", note);
       if (!ok) return res.status(500).json({ error: "Override store unavailable" });
       // Drop the cache so the next GET reflects the override immediately.
@@ -492,6 +507,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.post("/api/ar/invoices/:invoiceId/unmark-paid", requireAuth, async (req, res) => {
     try {
       const invoiceId = String(req.params.invoiceId || "");
+      if (arReceiptLinks().some(l=>l.invoiceId===invoiceId))
+        return res.status(409).json({error:"Remove the Xero receipt link first; unmarking does not remove payment evidence"});
       const ok = unmarkPaid(invoiceId);
       if (!ok) return res.status(500).json({ error: "Override store unavailable" });
       invalidate("ar:invoices");
@@ -510,6 +527,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         bcc?: string | string[];
         subject?: string; // optional override; defaults to "Friendly reminder — ICG invoice …"
         body?: string;    // optional plain-text body override; defaults to the polite template
+        expectedAmount?: number;
       };
       const to = body.to;
       if (!to) return res.status(400).json({ error: "to required" });
@@ -532,6 +550,10 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
       if (!found) return res.status(404).json({ error: "Invoice not found in any state tenant" });
+      if (!matchesOutstandingAmount(found.invoice.AmountDue,body.expectedAmount ?? NaN))
+        return res.status(409).json({error:"Invoice balance changed. Refresh the invoice and review the email again."});
+      try { assertArFollowupAllowed(found.tenant.id,invoiceId); }
+      catch(e) { return res.status(409).json({error:(e as Error).message}); }
       const days_overdue = found.invoice.DueDate
         ? Math.floor((Date.now() - found.invoice.DueDate.getTime()) / (24 * 60 * 60 * 1000))
         : 0;
@@ -556,15 +578,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       });
       const subject = body.subject && body.subject.trim() ? body.subject : tpl.subject;
 
+      const cc = membershipRecipients("", (Array.isArray(body.cc) ? body.cc : (body.cc || "").split(",")).map(s=>s.trim()).filter(Boolean));
+      try { assertArFollowupAllowed(found.tenant.id,invoiceId); }
+      catch(e) { return res.status(409).json({error:(e as Error).message}); }
       const result = await sendMail({
         to,
-        cc: body.cc,
+        cc,
         bcc: body.bcc,
+        replyTo: ACCOUNTS,
         subject,
         html: tpl.html,
         text: tpl.text,
       });
-      res.json({ id: result.id, threadId: result.threadId, to, cc: body.cc, subject });
+      res.json({ id: result.id, threadId: result.threadId, to, cc, subject });
     } catch (e: any) {
       res.status(500).json({ error: e?.message || "Failed to send follow-up" });
     }
@@ -590,6 +616,8 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
         }
       }
       if (!found) return res.status(404).send("Invoice not found");
+      try { assertArFollowupAllowed(found.tenant.id,invoiceId); }
+      catch(e) { return res.status(409).send((e as Error).message); }
       const days_overdue = found.invoice.DueDate
         ? Math.floor((Date.now() - found.invoice.DueDate.getTime()) / (24 * 60 * 60 * 1000))
         : 0;
