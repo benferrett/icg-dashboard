@@ -44,6 +44,7 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { queryClient } from "@/lib/queryClient";
 import { membershipApi, apiGet } from "@/lib/membership-api";
+import { MembershipXeroPaymentDialog, type SavedPaymentLink } from "./MembershipXeroPaymentDialog";
 
 const GOLD = "#A8966B";
 
@@ -72,6 +73,9 @@ interface FollowupCandidate {
   manualPaidAt: number | null;
   manualPaidBy: string | null;
   lastFollowupAt: number | null;
+  paidAmount?: number;
+  remainingBalance?: number;
+  linkedPayments?: SavedPaymentLink[];
 }
 
 interface FollowupResponse {
@@ -124,6 +128,23 @@ export default function MembershipFollowupView({ token }: { token: string }) {
   const [previewLoading, setPreviewLoading] = useState(false);
   const [confirmResend, setConfirmResend] = useState<string | null>(null);
   const [addOpen, setAddOpen] = useState(false);
+  const [linkFor,setLinkFor] = useState<FollowupCandidate | null>(null);
+  const [unlinkFor,setUnlinkFor] = useState<{member:FollowupCandidate;link:SavedPaymentLink} | null>(null);
+  function refreshPayments() {
+    queryClient.invalidateQueries({queryKey:["/api/membership-payment-followup/candidates"]});
+    queryClient.invalidateQueries({queryKey:["/api/membership-balance-email/candidates"]});
+    queryClient.invalidateQueries({queryKey:["membership-xero-receipts"]});
+  }
+  const unlinkMutation = useMutation({
+    mutationFn:async () => {
+      if (!unlinkFor) throw new Error("Select a linked receipt");
+      return apiRequest("POST","/api/membership-payment-followup/unlink-xero-payment",{
+        dealId:unlinkFor.member.dealId,linkId:unlinkFor.link.id,confirmed:true,
+      });
+    },
+    onSuccess:()=>{refreshPayments();setUnlinkFor(null);toast({title:"Xero payment link removed"});},
+    onError:(err:Error)=>toast({title:"Could not unlink receipt",description:err.message,variant:"destructive"}),
+  });
   const emptyAddForm = {
     dealId: "",
     clientNames: "",
@@ -214,7 +235,7 @@ export default function MembershipFollowupView({ token }: { token: string }) {
         firstNames: candidate.clientNames.split(/\s+/)[0] || "there",
         clientNames: candidate.clientNames,
         tier: candidate.tier,
-        balance: candidate.balance,
+        balance: candidate.remainingBalance ?? candidate.balance,
         originalSentAt: candidate.sentAt,
         strategistName: (candidate.ccEmails[0] ?? "your strategist").split("@")[0],
       });
@@ -253,7 +274,7 @@ export default function MembershipFollowupView({ token }: { token: string }) {
         firstNames: candidate.clientNames.split(/\s+/)[0] || "there",
         clientNames: candidate.clientNames,
         tier: candidate.tier,
-        balance: candidate.balance,
+        balance: candidate.remainingBalance ?? candidate.balance,
         originalSentAt: candidate.sentAt,
         strategistName: (candidate.ccEmails[0] ?? "your strategist").split("@")[0],
       });
@@ -277,12 +298,24 @@ export default function MembershipFollowupView({ token }: { token: string }) {
   const paid = candidates.filter((c) => c.status === "paid");
 
   const showXeroBanner =
-    !xeroStatus.isLoading &&
+    xeroStatus.isSuccess &&
     (!xeroStatus.data?.connected ||
       (data && !data.reconciledWithXero));
 
   return (
     <div className="py-4 w-full max-w-4xl space-y-6">
+      {linkFor && <MembershipXeroPaymentDialog key={linkFor.dealId} token={token} member={linkFor}
+        onClose={()=>setLinkFor(null)} onLinked={()=>{refreshPayments();setLinkFor(null);toast({title:"Xero receipt linked",description:"Payment evidence saved and balance recalculated."});}} />}
+      <Dialog open={!!unlinkFor} onOpenChange={open=>{if(!open && !unlinkMutation.isPending)setUnlinkFor(null);}}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Remove this payment link?</DialogTitle><DialogDescription>
+            Remove the {unlinkFor ? formatAud(unlinkFor.link.appliedAmount) : ""} allocation for {unlinkFor?.member.clientNames}.
+            The receipt remains unchanged in Xero and the link history is retained. This may return the membership to unpaid.
+          </DialogDescription></DialogHeader>
+          <DialogFooter><Button variant="outline" onClick={()=>setUnlinkFor(null)} disabled={unlinkMutation.isPending}>Cancel</Button>
+            <Button variant="destructive" disabled={unlinkMutation.isPending} onClick={()=>unlinkMutation.mutate()} data-testid="button-confirm-unlink">Remove link</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
       <div className="flex flex-col sm:flex-row items-start justify-between gap-4">
         <div>
           <h2 className="text-xl font-semibold tracking-tight flex items-center gap-2">
@@ -522,8 +555,10 @@ export default function MembershipFollowupView({ token }: { token: string }) {
               key={c.dealId}
               candidate={c}
               onPreview={() => openPreview(c)}
+              onLinkPayment={()=>setLinkFor(c)}
+              onUnlink={link=>setUnlinkFor({member:c,link})}
               onMarkPaid={() => markPaidMutation.mutate(c.dealId)}
-              busy={previewLoading && previewFor?.dealId === c.dealId}
+              busy={!data?.reconciledWithXero || c.linkedPayments?.some(l=>l.verified===false) || (previewLoading && previewFor?.dealId === c.dealId)}
             />
           ))}
         </section>
@@ -539,6 +574,8 @@ export default function MembershipFollowupView({ token }: { token: string }) {
               key={c.dealId}
               candidate={c}
               onMarkPaid={() => markPaidMutation.mutate(c.dealId)}
+              onLinkPayment={()=>setLinkFor(c)}
+              onUnlink={link=>setUnlinkFor({member:c,link})}
             />
           ))}
         </section>
@@ -554,6 +591,8 @@ export default function MembershipFollowupView({ token }: { token: string }) {
               key={c.dealId}
               candidate={c}
               onUndoPaid={() => undoPaidMutation.mutate(c.dealId)}
+              onLinkPayment={()=>setLinkFor(c)}
+              onUnlink={link=>setUnlinkFor({member:c,link})}
             />
           ))}
         </section>
@@ -666,12 +705,16 @@ function FollowupCard({
   onPreview,
   onMarkPaid,
   onUndoPaid,
+  onLinkPayment,
+  onUnlink,
   busy,
 }: {
   candidate: FollowupCandidate;
   onPreview?: () => void;
   onMarkPaid?: () => void;
   onUndoPaid?: () => void;
+  onLinkPayment?: () => void;
+  onUnlink?: (link:SavedPaymentLink) => void;
   busy?: boolean;
 }) {
   const c = candidate;
@@ -731,7 +774,19 @@ function FollowupCard({
               </dd>
             </div>
           )}
+          {!!c.paidAmount && c.status !== "paid" && <div><dt className="text-muted-foreground">Part paid</dt><dd>{formatAud(c.paidAmount)} received · {formatAud(c.remainingBalance ?? c.balance)} remaining</dd></div>}
         </dl>
+        {!!c.linkedPayments?.length && <div className="space-y-2">
+          {c.linkedPayments.map(link=><div key={link.id} className="rounded-md border p-3 text-xs space-y-1" data-testid={`linked-xero-${link.id}`}>
+            <p className="font-medium">{formatAud(link.appliedAmount)} linked · {link.payment.date} · {link.tenantName || "Xero"}</p>
+            <p className="break-words">{link.payment.contactName} · {link.payment.reference || "No reference"}{link.payment.invoiceNumber ? ` · ${link.payment.invoiceNumber}` : ""}</p>
+            <p className="break-all text-muted-foreground">Xero {link.payment.source === "payment" ? "payment" : "transaction"} ID: {link.payment.id}</p>
+            <p className="text-muted-foreground">Linked {formatDate(link.linkedAt)} by {link.linkedBy}</p>
+            {link.verified === false && <p className="text-destructive">No longer verified in Xero. This allocation is not counted as paid; review it before following up.</p>}
+            {link.verified === null && <p className="text-amber-700 dark:text-amber-400">Xero unavailable. Showing the last saved evidence; current payment status is unverified.</p>}
+            {onUnlink && <Button size="sm" variant="ghost" onClick={()=>onUnlink(link)} data-testid={`button-unlink-${link.id}`}>Remove link</Button>}
+          </div>)}
+        </div>}
 
         {isManualPaid && (
           <p className="text-[11px] text-muted-foreground">
@@ -741,6 +796,7 @@ function FollowupCard({
         )}
 
         <div className="flex flex-wrap justify-end gap-2">
+          {onLinkPayment && <Button size="sm" variant="outline" onClick={onLinkPayment} data-testid={`button-link-xero-${c.dealId}`}><LinkIcon className="size-3.5 mr-1.5" />Link Xero payment</Button>}
           {!isPaid && onMarkPaid && (
             <Button
               size="sm"
@@ -750,7 +806,7 @@ function FollowupCard({
               data-testid={`button-mark-paid-${c.dealId}`}
             >
               <CheckCircle2 className="size-3.5 mr-1.5" />
-              Mark as paid
+              Mark paid manually
             </Button>
           )}
           {isPaid && isManualPaid && onUndoPaid && (

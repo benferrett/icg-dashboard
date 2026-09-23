@@ -57,6 +57,20 @@ test("membership bridge: auth, preview parity, Gmail delivery and failure safety
     assert.equal((calls[0].init?.headers as Record<string, string>)["x-icg-token"], undefined);
     assert.equal(calls.some(c => c.url.includes("gmail.googleapis.com")), false, "preview must not send");
 
+    for (const action of ["xero-payments", "link-xero-payment", "unlink-xero-payment"]) {
+      const path = `/api/membership-payment-followup/${action}`;
+      const before = calls.length;
+      assert.equal((await request(path, { dealId: "synthetic-member" })).status, 401);
+      assert.equal(calls.length, before, "unauthenticated Xero actions never reach upstream");
+      const body = { dealId: "synthetic-member", confirmed: true };
+      assert.equal((await request(path, body, { "x-icg-token": "test-session" })).status, 200);
+      const forwarded = calls.at(-1)!;
+      assert.ok(forwarded.url.endsWith(path));
+      assert.equal(forwarded.init?.method, "POST");
+      assert.deepEqual(JSON.parse(String(forwarded.init?.body)), body);
+      assert.equal((forwarded.init?.headers as Record<string, string>).Authorization, "Bearer test-service-token");
+    }
+
     const message = { to: "client@example.com", cc: ["advisor@example.com"], subject: "Membership balance", html: "<p>Reviewed email</p>" };
     assert.equal((await request("/api/internal/membership-mail", message, { "x-icg-token": "test-session" })).status, 401);
     assert.equal((await request("/api/internal/membership-mail", { ...message, cc: ["bad\r\nBcc: hidden@example.com"] },
