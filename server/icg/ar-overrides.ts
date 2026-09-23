@@ -135,3 +135,10 @@ export function arOverridesInfo() {
   init();
   return { dbPath, persistent, enabled: !!db };
 }
+
+/** Shared durable AR database; receipt evidence must fail closed if unavailable. */
+export function arDatabase(): Database.Database {
+  const result = init();
+  if (!result) throw new Error("Accounts receivable storage is unavailable");
+  return result;
+}

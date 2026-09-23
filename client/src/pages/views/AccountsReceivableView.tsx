@@ -31,6 +31,8 @@ import {
 import { Skeleton } from "@/components/ui/skeleton";
 import { Stat } from "@/components/dashboard/Stat";
 import { useToast } from "@/hooks/use-toast";
+import { ArReceiptDialog } from "./ArReceiptDialog";
+import type { ArReceiptEvidence, ArReceiptLink } from "@shared/ar-receipts";
 import {
   ArrowUpDown,
   Send,
@@ -64,6 +66,7 @@ interface OpenInvoice {
   days_overdue: number;
   is_overdue: boolean;
   bucket: ArBucket;
+  receipt_evidence?: ArReceiptEvidence;
   override?: {
     marked_paid_at_iso: string;
     marked_by: string | null;
@@ -91,6 +94,7 @@ interface AgedRow {
 interface ArPayload {
   invoices: OpenInvoice[];
   cleared: OpenInvoice[];
+  receipt_history?: ArReceiptLink[];
   totals: HeadlineTotals;
   aged_debtors: Record<string, AgedRow>;
   generated_at: string;
@@ -129,7 +133,7 @@ async function apiPost<T>(path: string, token: string, body: unknown): Promise<T
 const BUCKET_LABEL: Record<ArBucket, string> = {
   overdue: "Overdue",
   within_terms: "Within terms",
-  cash_received_pending: "Cleared (pending)",
+  cash_received_pending: "Cash received (pending)",
   earned_not_invoiced: "Earned, not invoiced",
 };
 function bucketBadge(b: ArBucket) {
@@ -161,11 +165,31 @@ type SortKey =
 const DEFAULT_CC = [
   "benferrett@innercirclegroup.com.au",
   "alinapariyar@innercirclegroup.com.au",
+  "raul.garcia@innercirclegroup.com.au",
 ].join(", ");
 
 export function AccountsReceivableView({ token }: { token: string }) {
   const { toast } = useToast();
   const qc = useQueryClient();
+  const [linkInvoice,setLinkInvoice]=useState<OpenInvoice|null>(null);
+  const [removeLink,setRemoveLink]=useState<ArReceiptLink|null>(null);
+  async function refreshAr() {
+    await qc.invalidateQueries({queryKey:["ar-invoices"]});
+    await qc.invalidateQueries({queryKey:["ar-receipts"]});
+    const fresh=await apiGet<ArPayload>("/api/ar/invoices?refresh=1",token);
+    qc.setQueryData(["ar-invoices"],fresh);
+  }
+  const unlinkReceipt=useMutation({
+    mutationFn:async(link:ArReceiptLink)=>apiPost(`/api/ar/invoices/${link.invoiceId}/unlink-xero-receipt`,token,{
+      tenantId:link.invoiceTenantId,linkId:link.id,confirmed:true,
+    }),
+    onSuccess:async()=>{
+      setRemoveLink(null);
+      toast({title:"Receipt link removed",description:"Xero is unchanged. Any separate manual-paid override is preserved."});
+      await refreshAr();
+    },
+    onError:(e:Error)=>toast({title:"Could not remove receipt link",description:e.message,variant:"destructive"}),
+  });
 
   const q = useQuery<ArPayload>({
     queryKey: ["ar-invoices"],
@@ -387,6 +411,7 @@ export function AccountsReceivableView({ token }: { token: string }) {
           cc: fuCc,
           subject: fuSubject,
           body: fuBody,
+          expectedAmount: followupInv.amount_due,
         },
       );
     },
@@ -572,7 +597,7 @@ export function AccountsReceivableView({ token }: { token: string }) {
                   ? "Overdue"
                   : s === "within_terms"
                     ? "Within terms"
-                    : "Cleared"}
+                    : "Cash received"}
             </Button>
           ))}
         </div>
@@ -627,12 +652,12 @@ export function AccountsReceivableView({ token }: { token: string }) {
                     key={inv.invoice_id}
                     className={`border-t ${
                       inv.bucket === "cash_received_pending"
-                        ? "bg-emerald-50/60 text-muted-foreground"
+                        ? "bg-emerald-50/60 dark:bg-emerald-950/25 text-muted-foreground"
                         : ""
                     }`}
                   >
                     <td className="py-2 px-3">{inv.state}</td>
-                    <td className="py-2 px-3 font-mono text-xs">
+                    <td className="py-2 px-3 text-xs min-w-[15rem]">
                       <span className="inline-flex items-center gap-1.5">
                         {inv.bucket === "cash_received_pending" && (
                           <CheckCircle2
@@ -648,6 +673,14 @@ export function AccountsReceivableView({ token }: { token: string }) {
                           {inv.invoice_number}
                         </span>
                       </span>
+                      {inv.receipt_evidence&&<div className="mt-2 max-w-xs space-y-1 font-sans text-muted-foreground">
+                        <p>{fmtAudFull(inv.receipt_evidence.amount)} received · {inv.receipt_evidence.receipt.date}</p>
+                        <p>{inv.receipt_evidence.receipt.tenantName}</p>
+                        <p className="break-all">Receipt: {inv.receipt_evidence.receipt.id}</p>
+                        <p>{inv.receipt_evidence.verification==="verified"?"Receipt verified; Xero clearing still pending":
+                          inv.receipt_evidence.verification==="invalid"?"Receipt changed or reversed. Review required; reminders blocked.":
+                          "Xero verification unavailable. Saved evidence retained; reminders blocked."}</p>
+                      </div>}
                     </td>
                     <td className="py-2 px-3">{inv.contact_name || "—"}</td>
                     <td className="py-2 px-3 text-muted-foreground">{inv.reference || "—"}</td>
@@ -670,12 +703,16 @@ export function AccountsReceivableView({ token }: { token: string }) {
                           size="sm"
                           variant="outline"
                           onClick={() => openFollowup(inv)}
+                          disabled={inv.bucket==="cash_received_pending"||!!inv.receipt_evidence}
                           data-testid={`button-followup-${inv.invoice_id}`}
                         >
                           <Mail className="h-3.5 w-3.5 mr-1" />
                           Follow-up
                         </Button>
-                        {inv.bucket === "cash_received_pending" ? (
+                        {inv.receipt_evidence ? (
+                          <Button size="sm" variant="outline" onClick={()=>setRemoveLink(inv.receipt_evidence!)}>Remove receipt link</Button>
+                        ) : <Button size="sm" variant="outline" onClick={()=>setLinkInvoice(inv)}>Link Xero payment</Button>}
+                        {inv.receipt_evidence ? null : inv.bucket === "cash_received_pending" ? (
                           <Button
                             size="sm"
                             variant="ghost"
@@ -694,7 +731,7 @@ export function AccountsReceivableView({ token }: { token: string }) {
                                 data-testid={`button-markpaid-${inv.invoice_id}`}
                               >
                                 <CheckCircle2 className="h-3.5 w-3.5 mr-1" />
-                                Mark paid
+                                Mark paid manually
                               </Button>
                             </PopoverTrigger>
                             <PopoverContent className="w-64">
@@ -725,6 +762,35 @@ export function AccountsReceivableView({ token }: { token: string }) {
         </div>
       </Card>
 
+      {!!q.data?.receipt_history?.length&&<Card className="p-4">
+        <details>
+          <summary className="cursor-pointer text-sm font-medium">Payment link history ({q.data.receipt_history.length})</summary>
+          <p className="text-xs text-muted-foreground mt-2">Saved receipt evidence remains here even after an invoice leaves the open Xero list. This history is not proof that an intercompany clearing entry has been posted.</p>
+          <div className="mt-3 space-y-3">
+            {q.data.receipt_history.map(link=><div key={link.id} className="rounded border p-3 text-sm space-y-1">
+              <p className="font-medium">{link.invoiceNumber} · {link.vendor} · {fmtAudFull(link.amount)}</p>
+              <p className="text-xs">{link.invoiceTenantName} ← {link.receipt.tenantName}</p>
+              <p className="text-xs break-all">{link.receipt.date} · {link.receipt.reference||"No reference"} · {link.receipt.id}</p>
+              <p className="text-xs text-muted-foreground">Linked {new Date(link.linkedAt).toLocaleString("en-AU")} by {link.linkedBy}.
+                {link.removedAt?` Removed ${new Date(link.removedAt).toLocaleString("en-AU")} by ${link.removedBy}.`:" Link active."}</p>
+              {!link.removedAt&&<Button size="sm" variant="ghost" onClick={()=>setRemoveLink(link)}>Remove receipt link</Button>}
+            </div>)}
+          </div>
+        </details>
+      </Card>}
+
+      {linkInvoice&&<ArReceiptDialog token={token} invoice={linkInvoice} onClose={()=>setLinkInvoice(null)}
+        onLinked={()=>{setLinkInvoice(null);toast({title:"Commission receipt linked",description:"Cash marked received, pending Xero clearing."});
+          void refreshAr().catch((e:Error)=>toast({title:"Receipt saved; refresh needed",description:e.message,variant:"destructive"}));}}/>}
+      <Dialog open={!!removeLink} onOpenChange={open=>{if(!open&&!unlinkReceipt.isPending)setRemoveLink(null);}}>
+        <DialogContent>
+          <DialogHeader><DialogTitle>Remove commission receipt link?</DialogTitle>
+            <DialogDescription>Remove the {fmtAudFull(removeLink?.amount||0)} receipt link from {removeLink?.invoiceNumber}? The invoice may return to the collection list. Xero transactions and any separate manual-paid override are unchanged; the audit history is kept.</DialogDescription></DialogHeader>
+          <DialogFooter><Button variant="outline" disabled={unlinkReceipt.isPending} onClick={()=>setRemoveLink(null)}>Cancel</Button>
+            <Button variant="destructive" disabled={unlinkReceipt.isPending} onClick={()=>{if(removeLink)unlinkReceipt.mutate(removeLink);}}>Confirm removal</Button></DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Follow-up dialog — edit fields on the left, live branded preview on
           the right so operators see exactly what the vendor will receive. */}
       <Dialog open={followupOpen} onOpenChange={setFollowupOpen}>
@@ -732,7 +798,7 @@ export function AccountsReceivableView({ token }: { token: string }) {
           <DialogHeader>
             <DialogTitle>Send follow-up</DialogTitle>
             <DialogDescription>
-              From accounts@innercirclegroup.com.au. Edit the message on the left — the branded email preview on the right updates live.
+              From accounts@innercirclegroup.com.au, with a copy in accounts Sent. Raul is always included in CC. Review the message and recipients before sending.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">

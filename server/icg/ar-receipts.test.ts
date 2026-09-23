@@ -1,0 +1,120 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import express from "express";
+
+test("AR receipt links: exact amounts, cross-company accounting, audit and API safeguards",async()=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),"icg-ar-receipts-"));
+  process.env.DATA_DIR=dir;
+  const {XERO_TENANT_VIC:vic,XERO_TENANT_QLD:qld,XERO_TENANT_CENTRAL:central,normaliseInvoice}=await import("./xero");
+  const {registerArReceiptRoutes,arReceiptLinks,checkArReceiptLink,assertArFollowupAllowed,listArReceipts}=await import("./ar-receipts");
+  const {getUnpaidInvoices,getHeadlineTotals,getAgedDebtors}=await import("./ar");
+  const {markPaid,unmarkPaid}=await import("./ar-overrides");
+  const id="10000000-0000-4000-8000-000000000001";
+  const id2="10000000-0000-4000-8000-000000000002";
+  const paymentId="20000000-0000-4000-8000-000000000001";
+  const sourceInvoice="30000000-0000-4000-8000-000000000001";
+  const date=new Date().toISOString().slice(0,10);
+  const inv={InvoiceID:id,InvoiceNumber:"INV-QA",Type:"ACCREC",Status:"AUTHORISED",CurrencyCode:"AUD",
+    AmountDue:22000,Total:33000,Contact:{Name:"Synthetic Vendor"},Date:date,DueDate:"2026-01-01"};
+  const raw={PaymentID:paymentId,PaymentType:"ACCRECPAYMENT",Status:"AUTHORISED",Amount:22000,Date:date,
+    IsReconciled:true,Reference:"Property lot QA",Invoice:{InvoiceID:sourceInvoice,CurrencyCode:"AUD",InvoiceNumber:"CENTRAL-QA",Contact:{Name:"Synthetic Vendor"}}};
+  let detail=structuredClone(raw), balance=22000,offline=false,calls=0;
+  const fetcher:any=async(tenant:string,url:string,params?:any)=>{
+    calls++;
+    if(offline) throw new Error("Xero unavailable");
+    if(url.endsWith(`/Invoices/${id}`)) return {Invoices:[{...inv,AmountDue:balance}]};
+    if(url.endsWith(`/Invoices/${id2}`)) return {Invoices:[{...inv,InvoiceID:id2,InvoiceNumber:"INV-QA2"}]};
+    if(url.endsWith(`/Invoices/${sourceInvoice}`)) return {Invoices:[{InvoiceID:sourceInvoice,CurrencyCode:"AUD"}]};
+    if(url.endsWith(`/Payments/${paymentId}`)) return {Payments:[structuredClone(detail)]};
+    if(url.endsWith("/Payments")) return {Payments:[raw,{...raw,PaymentID:"wrong-amount",Amount:21999.99},{...raw,PaymentID:"foreign",Invoice:{...raw.Invoice,CurrencyCode:"USD"}},{...raw,PaymentID:"deleted",Status:"DELETED"}]};
+    if(url.endsWith("/BankTransactions")) return {BankTransactions:[]};
+    throw new Error("Unexpected Xero read");
+  };
+  const app=express();app.use(express.json());
+  let invalidations=0;
+  registerArReceiptRoutes(app,(req,res,next)=>req.headers["x-test"]==="ok"?next():void res.status(401).json({}),()=>{invalidations++;},fetcher);
+  const server=app.listen(0,"127.0.0.1");
+  await new Promise<void>(r=>server.once("listening",r));
+  const base=`http://127.0.0.1:${(server.address() as any).port}/api/ar/invoices`;
+  const post=(suffix:string,body:any,invoiceId=id,auth=true)=>fetch(`${base}/${invoiceId}/${suffix}`,{
+    method:"POST",headers:{"Content-Type":"application/json",...(auth?{"x-test":"ok"}:{})},body:JSON.stringify(body),
+  });
+  const body={tenantId:vic,receiptTenantId:central,source:"payment",paymentId,expectedAmount:22000,confirmed:true};
+  try {
+    assert.equal((await post("link-xero-receipt",body,id,false)).status,401);
+    assert.equal(calls,0);
+    assert.equal((await post("link-xero-receipt",{...body,confirmed:false})).status,400);
+    assert.equal(calls,0,"confirmation checked before Xero reads");
+    assert.equal((await post("link-xero-receipt",{...body,receiptTenantId:qld})).status,409);
+    const listed=await (await post("xero-receipts",{tenantId:vic,receiptTenantId:central,since:date,until:date})).json();
+    assert.equal(listed.receipts.length,1,"exact cents only; foreign/deleted excluded");
+    assert.equal(listed.amountDue,22000,"uses AmountDue, not Total");
+    assert.equal((await post("link-xero-receipt",{...body,expectedAmount:33000})).status,409);
+    detail={...raw,Amount:21999.99};
+    assert.equal((await post("link-xero-receipt",body)).status,409);
+    detail={...raw,Invoice:{...raw.Invoice,CurrencyCode:"USD"}};
+    assert.equal((await post("link-xero-receipt",body)).status,409);
+    detail={...raw,Status:"DELETED"};
+    assert.equal((await post("link-xero-receipt",body)).status,409);
+    detail=structuredClone(raw);
+    assert.equal((await post("link-xero-receipt",{...body,receiptTenantId:vic})).status,409,"same-entity invoice payment must not be counted twice");
+    const stateRows=await (await post("xero-receipts",{tenantId:vic,receiptTenantId:vic,since:date,until:date})).json();
+    assert.equal(stateRows.receipts[0].alreadyApplied,true);
+    const result=await post("link-xero-receipt",{...body,amount:1});
+    assert.equal(result.status,200);
+    const link=(await result.json()).link;
+    assert.equal(link.amount,22000,"client cannot forge amount");
+    assert.equal(invalidations,1);
+    assert.equal((await post("link-xero-receipt",body)).status,200,"retry idempotent");
+    assert.equal(arReceiptLinks().length,1);
+    assert.equal((await post("link-xero-receipt",body,id2)).status,409,"one receipt cannot settle two invoices");
+    assert.throws(()=>assertArFollowupAllowed(vic,id),/already marked/);
+    const verifier=(l:any)=>checkArReceiptLink(l,fetcher);
+    const invoiceFetch=async(t:string)=>t===vic?[normaliseInvoice(inv)]:[];
+    let snapshot=await getUnpaidInvoices(invoiceFetch,verifier);
+    assert.equal(snapshot.invoices.length,0);
+    assert.equal(snapshot.cleared.length,1);
+    assert.equal(getHeadlineTotals([...snapshot.invoices,...snapshot.cleared]).buckets.overdue.amount,0);
+    assert.equal(getAgedDebtors(snapshot.cleared).TOTAL.total.amount,0);
+    assert.equal(snapshot.cleared[0].receipt_evidence?.verification,"verified");
+    detail={...raw,Status:"DELETED"};
+    snapshot=await getUnpaidInvoices(invoiceFetch,verifier);
+    assert.equal(snapshot.invoices.length,1,"reversed receipt returns to review");
+    assert.equal(snapshot.invoices[0].receipt_evidence?.verification,"invalid");
+    assert.throws(()=>assertArFollowupAllowed(vic,id),/already marked/,"invalid evidence still blocks reminders until reviewed");
+    offline=true;
+    snapshot=await getUnpaidInvoices(invoiceFetch,verifier);
+    assert.equal(snapshot.cleared[0].receipt_evidence?.verification,"unavailable","outage retains saved evidence");
+    assert.equal((await post("xero-receipts",{tenantId:vic,receiptTenantId:central,since:date,until:date})).status,409,"outage is not empty success");
+    offline=false; detail=structuredClone(raw);
+    detail.Invoice.CurrencyCode="";
+    assert.equal((await checkArReceiptLink(link,fetcher)).verification,"verified","sparse payment currency resolved from invoice");
+    const settled=await getUnpaidInvoices(async()=>[],verifier);
+    assert.equal(settled.invoices.length+settled.cleared.length,0);
+    assert.equal(arReceiptLinks(true).length,1,"evidence persists after invoice leaves open list");
+    markPaid(id,vic,"QA","Existing manual override");
+    assert.equal((await post("unlink-xero-receipt",{tenantId:qld,linkId:link.id,confirmed:true})).status,400);
+    assert.equal((await post("unlink-xero-receipt",{tenantId:vic,linkId:link.id,confirmed:false})).status,400);
+    assert.equal((await post("unlink-xero-receipt",{tenantId:vic,linkId:link.id,confirmed:true})).status,200);
+    assert.equal(arReceiptLinks().length,0);
+    assert.ok(arReceiptLinks(true)[0].removedAt);
+    assert.throws(()=>assertArFollowupAllowed(vic,id),/already marked/,"unlink preserves manual override");
+    unmarkPaid(id);
+    assert.doesNotThrow(()=>assertArFollowupAllowed(vic,id));
+    snapshot=await getUnpaidInvoices(invoiceFetch,verifier);
+    assert.equal(snapshot.invoices.length,1);
+    let pages=0;
+    await listArReceipts(central,date,date,22000,(async(_t:string,p:string,params:any)=>{
+      if(p.endsWith("/BankTransactions"))return {BankTransactions:[]};
+      pages++;return {Payments:Array.from({length:params.page===1?100:1},(_,i)=>({...raw,PaymentID:`${params.page}-${i}`}))};
+    }) as any);
+    assert.equal(pages,2);
+  } finally {
+    server.closeAllConnections();
+    await new Promise<void>(r=>server.close(()=>r()));
+    fs.rmSync(dir,{recursive:true,force:true});
+  }
+});
