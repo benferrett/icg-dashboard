@@ -19,6 +19,9 @@ export const MEMBERSHIP_ROUTES = [
   ["post", "/api/membership-payment-followup/mark-paid"],
   ["post", "/api/membership-payment-followup/undo-paid"],
   ["post", "/api/membership-payment-followup/manual-add"],
+  ["post", "/api/membership-payment-followup/xero-payments"],
+  ["post", "/api/membership-payment-followup/link-xero-payment"],
+  ["post", "/api/membership-payment-followup/unlink-xero-payment"],
   ["get", "/api/membership-xero/status"],
 ] as const;
 
