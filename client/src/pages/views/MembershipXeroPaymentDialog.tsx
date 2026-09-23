@@ -164,7 +164,7 @@ export function MembershipXeroPaymentDialog({ token, member, onClose, onLinked }
           <Button variant="outline" onClick={onClose} disabled={mutation.isPending}>Cancel</Button>
           <Button data-testid="button-confirm-xero-link" onClick={()=>mutation.mutate()} disabled={!selectedMatchesBalance || !confirmed || apply<=0 || mutation.isPending || receipts.isFetching || !!receipts.error}>
             {mutation.isPending && <Loader2 className="size-4 mr-2 animate-spin" />}
-            {remaining === 0 ? "Link payment and mark paid" : "Link part payment"}
+            Link payment and mark paid
           </Button>
         </DialogFooter>
       </DialogContent>
