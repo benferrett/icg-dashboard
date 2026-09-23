@@ -25,12 +25,14 @@ test("membership bridge: auth, preview parity, Gmail delivery and failure safety
   const realFetch = globalThis.fetch;
   const calls: { url: string; init: RequestInit | undefined }[] = [];
   let serviceStatus = 200;
+  let gmailReady = true;
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), init });
     if (String(url).includes("oauth2.googleapis.com")) {
       return Response.json({ access_token: "test-access", expires_in: 3600 });
     }
     if (String(url).includes("gmail.googleapis.com")) return Response.json({ id: "gmail-message", threadId: "gmail-thread" });
+    if (String(url).endsWith("/api/xero/status")) return Response.json({ membershipDelivery: gmailReady ? "accounts-gmail" : undefined });
     return Response.json({
       to: "client@example.com", cc: ["advisor@example.com"],
       subject: "Membership balance", html: "<p>Preview</p>",
@@ -69,6 +71,11 @@ test("membership bridge: auth, preview parity, Gmail delivery and failure safety
     assert.ok(mime.includes(`Cc: advisor@example.com, ${RAUL}`));
     assert.ok(mime.includes("<p>Reviewed email</p>"));
 
+    gmailReady = false;
+    const priorSends = calls.filter(c => c.url.endsWith("/membership-balance-email/send")).length;
+    assert.equal((await request("/api/membership-balance-email/send", {}, { "x-icg-token": "test-session" })).status, 503);
+    assert.equal(calls.filter(c => c.url.endsWith("/membership-balance-email/send")).length, priorSends);
+    gmailReady = true;
     serviceStatus = 409;
     assert.equal((await request("/api/membership-balance-email/send", {}, { "x-icg-token": "test-session" })).status, 409);
     serviceStatus = 401;

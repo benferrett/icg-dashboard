@@ -51,6 +51,21 @@ export function registerMembershipRoutes(app: Express, requireAuth: RequestHandl
         error: "Membership connection is not configured. Set MEMBERSHIP_EMAIL_API_TOKEN to the same secret on the dashboard and Property Tool services.",
       });
       try {
+        // During the coordinated cutover the old Property Tool still uses
+        // Resend. Never let the new worklist send until Gmail delivery is live.
+        if (path.endsWith("/send")) {
+          const readiness = await fetch(`${SERVICE_ORIGIN}/api/xero/status`, {
+            headers: { Authorization: `Bearer ${token}` },
+            redirect: "error",
+            signal: AbortSignal.timeout(15_000),
+          });
+          const state = readiness.ok ? await readiness.json() : null;
+          if (state?.membershipDelivery !== "accounts-gmail") {
+            return res.status(503).json({
+              error: "Accounts Gmail cutover is not ready. No email was sent; finish deploying the Property Tool companion change.",
+            });
+          }
+        }
         const target = path === "/api/membership-xero/status" ? "/api/xero/status" : path;
         const upstream = await fetch(`${SERVICE_ORIGIN}${target}`, {
           method: method.toUpperCase(),
