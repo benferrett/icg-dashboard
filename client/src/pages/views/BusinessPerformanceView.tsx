@@ -40,7 +40,8 @@ const METRIC_META: { key: keyof BizPerfRow; label: string; color: string }[] = [
   { key: "scheduled", label: "Scheduled DS", color: "hsl(48 96% 53%)" },
   { key: "sats", label: "Sats", color: "hsl(160 84% 39%)" },
   { key: "members", label: "Members", color: "hsl(280 65% 60%)" },
-  { key: "eois", label: "EOIs", color: "hsl(0 72% 55%)" },
+  { key: "eois", label: "Gross EOIs", color: "hsl(0 72% 55%)" },
+  { key: "eoiRefunds", label: "EOI refunds", color: "hsl(25 85% 45%)" },
   { key: "uc", label: "UC", color: "hsl(190 90% 42%)" },
 ];
 
@@ -95,8 +96,20 @@ export function BusinessPerformanceView({ token }: { token: string }) {
           {data ? `· updated ${timeAgo(data.generatedAt)}` : "· loading…"}
         </span>
       </div>
+      <p className="-mt-5 text-xs text-muted-foreground" data-testid="biz-eoi-reporting-note">
+        Gross EOIs stay in the period of their EOI Paid Date (stage-entry date if
+        unavailable), even after cancellation. Refunds are counted separately by
+        cancellation date, not deducted from gross EOIs.
+      </p>
 
-      {q.isLoading || !data ? (
+      {q.isError ? (
+        <Card className="p-4 border-destructive/40" role="alert">
+          <p className="text-sm">Business performance could not be loaded. No incomplete EOI totals are shown.</p>
+          <button className="mt-3 text-sm underline" data-testid="biz-retry" onClick={() => q.refetch()}>
+            Retry
+          </button>
+        </Card>
+      ) : q.isLoading || !data ? (
         <Skeleton className="h-96 w-full" />
       ) : (
         <>
@@ -105,7 +118,7 @@ export function BusinessPerformanceView({ token }: { token: string }) {
             title={`${rangeLabel.replace(/ · updated.*/, "")} · totals`}
             icon={<TrendingUp className="h-4 w-4 text-primary" />}
           >
-            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-7 gap-3">
+            <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
               {METRIC_META.map((m) => (
                 <Stat
                   key={m.key}
@@ -165,6 +178,7 @@ export function BusinessPerformanceView({ token }: { token: string }) {
                         name={m.label}
                         stroke={m.color}
                         strokeWidth={2}
+                        strokeDasharray={m.key === "eoiRefunds" ? "5 4" : undefined}
                         dot={{ r: 2 }}
                         activeDot={{ r: 4 }}
                       />

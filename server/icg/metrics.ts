@@ -1,5 +1,6 @@
 // Aggregation logic that turns raw HubSpot deals into the dashboard's four sections.
 import { hubspot } from "./hubspot";
+import { EOI_PAID_DATE_PROP, eoiPipelineFilterGroups, eoiMilestoneMs, eoiRefundMs, isEoiTestRecord } from "./eoi-reporting";
 import { attendanceRows, loadAttendanceContext, hasReviewedSat } from "./attendance";
 import type { AttendanceItem } from "../../shared/attendance";
 import { metaAdInsights, MetaAdRow } from "./meta";
@@ -1687,7 +1688,7 @@ async function strategistFromActivity(
   return out;
 }
 
-async function contracts(range: PeriodRange) {
+export async function contracts(range: PeriodRange) {
   const startMs = +new Date(range.start);
   const endMs = +new Date(range.end);
 
@@ -1699,6 +1700,7 @@ async function contracts(range: PeriodRange) {
       s.stages.map((id) => `hs_v2_date_entered_${id}`),
     ),
     CONTRACT_EOI_REFUND_ENTERED_PROP,
+    EOI_PAID_DATE_PROP,
   ];
   const baseProps = [
     "dealname",
@@ -1716,35 +1718,22 @@ async function contracts(range: PeriodRange) {
     "strategist_assigned",
   ];
 
-  // Pull Contract pipeline + both settlement pipelines (whole pipeline each),
-  // PLUS — from the Property Sales pipeline — ONLY deals sitting at the shared
-  // EOI stage (3051561412). Property Sales EOIs are real EOI sales and must be
-  // counted; its other early stages (Property Opportunity, Ready 6-12mo, etc.)
-  // are not part of the contract funnel, so we filter them out at query time to
-  // avoid dragging in hundreds of irrelevant deals. filterGroups are OR'd; the
-  // filters within the Property Sales group are AND'd (pipeline AND stage).
-  const pipelineIds = [CONTRACT_PIPELINE, ...CONTRACT_UC_PIPELINES];
-  const filterGroups: any[] = pipelineIds.map((id) => ({
-    filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
-  }));
-  for (const psId of CONTRACT_EOI_PIPELINES) {
-    for (const eoiStage of CONTRACT_EOI_STAGES) {
-      filterGroups.push({
-        filters: [
-          { propertyName: "pipeline", operator: "EQ", value: psId },
-          { propertyName: "dealstage", operator: "EQ", value: eoiStage },
-        ],
-      });
-    }
-  }
-  const deals = await hubspot.searchDeals(
+  // Historical milestones survive movement to any other stage.
+  const filterGroups = eoiPipelineFilterGroups();
+  const pulledDeals = await hubspot.searchDeals(
     {
       filterGroups,
       properties: [...baseProps, ...enteredProps],
       sorts: [{ propertyName: "hs_lastmodifieddate", direction: "DESCENDING" }],
     },
-    1000,
+    10000,
   );
+  if (pulledDeals.length >= 10000) throw new Error("Property deal search reached its limit; refusing to report incomplete EOI totals.");
+  // Avoid costly attribution lookups for early property opportunities with no
+  // milestone, refund or contract stage. They cannot affect these metrics.
+  const deals = pulledDeals.filter(({ properties: p }) =>
+    Number.isFinite(eoiMilestoneMs(p)) || Number.isFinite(eoiRefundMs(p)) ||
+    !!CONTRACT_STAGE_TO_STEP[p.dealstage || ""] || CONTRACT_UC_PIPELINES.includes(p.pipeline || ""));
 
   // --- Strategist attribution -----------------------------------------------
   // Source of truth = the deal card's `strategist` field (an owner ID). Deal
@@ -1846,7 +1835,7 @@ async function contracts(range: PeriodRange) {
   // Unconditional. We read the per-deal hs_v2_date_entered_<stageId> timestamps
   // (retained by HubSpot for every stage a deal passed through) to find when
   // each milestone happened, and filter by the SELECTED PERIOD on that date.
-  //   - EOI date  = earliest EOI-stage entered date.
+  //   - EOI date  = EOI Paid Date, otherwise earliest EOI-stage entered date.
   //   - UC date   = UC-stage entered date, or (settlement pipelines) closedate.
   // The middle steps (issued / signed / exchanged) stay CURRENT-stage so the
   // funnel bars still show where deals are right now.
@@ -1900,20 +1889,15 @@ async function contracts(range: PeriodRange) {
     // Drop obvious test/dummy records by name (e.g. "Test-Raul") — these can be
     // attributed to a real strategist yet are not genuine EOI/UC sales. Matches
     // the skill's treatment of "... test ..." records as non-real.
-    const dealNameLc = String(props.dealname || "").toLowerCase();
-    const isTestRecord = /\btest\b/.test(dealNameLc);
-    // Drop genuinely unattributed test/fake records (no real strategist, no
-    // client activity) so they don't inflate EOI / UC milestone counts.
+    const isTestRecord = isEoiTestRecord(props);
+    // Preserve the existing UC/middle-step eligibility rules. EOI eligibility
+    // below is independent of attribution and excludes only explicit tests.
     const isFake = owner === "Unattributed" || isTestRecord;
 
     const amt = num(props.amount_in_home_currency) || num(props.amount);
 
-    // --- EOI milestone date (earliest EOI-stage entered) ---
-    let eoiMs = NaN;
-    for (const sid of CONTRACT_EOI_STAGES) {
-      const t = parseT(props[`hs_v2_date_entered_${sid}`]);
-      if (!isNaN(t) && (isNaN(eoiMs) || t < eoiMs)) eoiMs = t;
-    }
+    // Paid date is authoritative; stage-entry history is the legacy fallback.
+    const eoiMs = eoiMilestoneMs(props);
     const hasEoi = !isNaN(eoiMs);
 
     // --- UC milestone (reached Unconditional?) + date ---
@@ -1932,7 +1916,8 @@ async function contracts(range: PeriodRange) {
     const ucIso = reachedUC && !isNaN(ucMs) ? new Date(ucMs).toISOString() : undefined;
 
     // Did this deal hit a milestone inside the selected period?
-    const eoiInPeriod = !isFake && hasEoi && inPeriod(eoiMs);
+    // Missing attribution is not evidence of a fake EOI.
+    const eoiInPeriod = !isTestRecord && hasEoi && inPeriod(eoiMs);
     const ucInPeriod = !isFake && reachedUC && inPeriod(ucMs);
 
     // --- Funnel / by-strategist counts ---
@@ -1965,16 +1950,13 @@ async function contracts(range: PeriodRange) {
     }
 
     // --- EOI REFUND (separate line) -----------------------------------------
-    // A deal in the EOI Cancelled stage is an EOI refund, dated by when it
-    // ENTERED that stage (fallback closedate). Reported separately from gross
+    // A dated EOI cancellation is a refund event, even after later movement.
+    // Never substitute the original sale's closedate. Reported separately from gross
     // EOI: the deal's EOI milestone above still counts in the month it was
     // signed, and the refund counts in the month it was cancelled (which may be
     // a different month). Only count genuine deals (skip fake/test).
-    if (isRefund && !isFake) {
-      const cancMs = (() => {
-        const t = parseT(props[CONTRACT_EOI_REFUND_ENTERED_PROP]);
-        return !isNaN(t) ? t : parseT(props.closedate);
-      })();
+    if (!isTestRecord) {
+      const cancMs = eoiRefundMs(props);
       if (inPeriod(cancMs)) {
         eoiRefunds++;
         if (dsrc) eoiRefundsBySource[dsrc]++;
@@ -2157,6 +2139,7 @@ export async function businessPerformance(granularityRaw?: string) {
     sats: zeros(),
     members: zeros(),
     eois: zeros(),
+    eoiRefunds: zeros(),
     uc: zeros(),
   };
 
@@ -2324,28 +2307,16 @@ export async function businessPerformance(granularityRaw?: string) {
 
   // ---- EOIs + UC: milestone dates across contract/property/settlement ------
   // Same deal pull + milestone logic as the contracts() section, but bucketed
-  // by the EOI-entered / UC-entered date. Excludes Fallover + test records.
+  // by the EOI paid / fallback entered date and UC-entered date.
   const contractsP = (async () => {
     const enteredProps = [
       ...CONTRACT_FUNNEL_STEPS.flatMap((s) =>
         s.stages.map((id) => `hs_v2_date_entered_${id}`),
       ),
       CONTRACT_EOI_REFUND_ENTERED_PROP,
+      EOI_PAID_DATE_PROP,
     ];
-    const pipelineIds = [CONTRACT_PIPELINE, ...CONTRACT_UC_PIPELINES];
-    const filterGroups: any[] = pipelineIds.map((id) => ({
-      filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
-    }));
-    for (const psId of CONTRACT_EOI_PIPELINES) {
-      for (const eoiStage of CONTRACT_EOI_STAGES) {
-        filterGroups.push({
-          filters: [
-            { propertyName: "pipeline", operator: "EQ", value: psId },
-            { propertyName: "dealstage", operator: "EQ", value: eoiStage },
-          ],
-        });
-      }
-    }
+    const filterGroups = eoiPipelineFilterGroups();
     const deals = await hubspot.searchDeals(
       {
         filterGroups,
@@ -2360,8 +2331,9 @@ export async function businessPerformance(granularityRaw?: string) {
         ],
         sorts: [{ propertyName: "hs_lastmodifieddate", direction: "DESCENDING" }],
       },
-      3000,
+      10000,
     );
+    if (deals.length >= 10000) throw new Error("Property deal search reached its limit; refusing to report incomplete EOI totals.");
     for (const d of deals) {
       const props = d.properties as any;
       const stage = props.dealstage || "";
@@ -2373,16 +2345,13 @@ export async function businessPerformance(granularityRaw?: string) {
       if (!isRefund && CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
       const isSettlement = CONTRACT_UC_PIPELINES.includes(props.pipeline || "");
 
-      // EOI milestone = earliest EOI-stage entered date (incl. later-cancelled).
-      let eoiMs = NaN;
-      for (const sid of CONTRACT_EOI_STAGES) {
-        const t = parseT(props[`hs_v2_date_entered_${sid}`]);
-        if (!isNaN(t) && (isNaN(eoiMs) || t < eoiMs)) eoiMs = t;
-      }
+      const eoiMs = eoiMilestoneMs(props);
       if (!isNaN(eoiMs)) {
         const bi = bucketOf(eoiMs);
         if (bi >= 0) series.eois[bi]++;
       }
+      const refundBucket = bucketOf(eoiRefundMs(props));
+      if (refundBucket >= 0) series.eoiRefunds[refundBucket]++;
 
       // UC milestone = reached Unconditional (stage) or any settlement deal.
       const reachedUC = stage === CONTRACT_UC_STAGE || isSettlement;
@@ -2404,7 +2373,8 @@ export async function businessPerformance(granularityRaw?: string) {
     { key: "scheduled", label: "Scheduled DS" },
     { key: "sats", label: "Sats" },
     { key: "members", label: "Members" },
-    { key: "eois", label: "EOIs" },
+    { key: "eois", label: "Gross EOIs" },
+    { key: "eoiRefunds", label: "EOI refunds" },
     { key: "uc", label: "UC" },
   ];
   const rows = buckets.map((b, i) => ({
@@ -2417,6 +2387,7 @@ export async function businessPerformance(granularityRaw?: string) {
     sats: series.sats[i],
     members: series.members[i],
     eois: series.eois[i],
+    eoiRefunds: series.eoiRefunds[i],
     uc: series.uc[i],
   }));
   const totals = metrics.reduce((acc, m) => {
@@ -2814,21 +2785,9 @@ export async function monthlyReport2026(year = 2026) {
     const enteredProps = [
       ...CONTRACT_FUNNEL_STEPS.flatMap((s) => s.stages.map((id) => `hs_v2_date_entered_${id}`)),
       CONTRACT_EOI_REFUND_ENTERED_PROP,
+      EOI_PAID_DATE_PROP,
     ];
-    const pipelineIds = [CONTRACT_PIPELINE, ...CONTRACT_UC_PIPELINES];
-    const filterGroups: any[] = pipelineIds.map((id) => ({
-      filters: [{ propertyName: "pipeline", operator: "EQ", value: id }],
-    }));
-    for (const psId of CONTRACT_EOI_PIPELINES) {
-      for (const eoiStage of CONTRACT_EOI_STAGES) {
-        filterGroups.push({
-          filters: [
-            { propertyName: "pipeline", operator: "EQ", value: psId },
-            { propertyName: "dealstage", operator: "EQ", value: eoiStage },
-          ],
-        });
-      }
-    }
+    const filterGroups = eoiPipelineFilterGroups();
     const deals = await hubspot.searchDeals(
       {
         filterGroups,
@@ -2839,8 +2798,9 @@ export async function monthlyReport2026(year = 2026) {
         ],
         sorts: [{ propertyName: "hs_lastmodifieddate", direction: "DESCENDING" }],
       },
-      4000,
+      10000,
     );
+    if (deals.length >= 10000) throw new Error("Property deal search reached its limit; refusing to report incomplete EOI totals.");
     // deal_id -> EOI bucket index, for resolving distinct EOI clients per month.
     const eoiDealBucket: Record<string, number> = {};
     for (const d of deals) {
@@ -2850,11 +2810,7 @@ export async function monthlyReport2026(year = 2026) {
       const isRefund = stage === CONTRACT_EOI_REFUND_STAGE;
       if (!isRefund && CONTRACT_EXCLUDE_STAGES.includes(stage)) continue;
       const isSettlement = CONTRACT_UC_PIPELINES.includes(props.pipeline || "");
-      let eoiMs = NaN;
-      for (const sid of CONTRACT_EOI_STAGES) {
-        const t = parseT(props[`hs_v2_date_entered_${sid}`]);
-        if (!isNaN(t) && (isNaN(eoiMs) || t < eoiMs)) eoiMs = t;
-      }
+      const eoiMs = eoiMilestoneMs(props);
       if (!isNaN(eoiMs)) {
         const bi = bucketOf(eoiMs);
         if (bi >= 0) {
@@ -2863,11 +2819,8 @@ export async function monthlyReport2026(year = 2026) {
         }
       }
       // EOI refunds: bucket by when the deal ENTERED the EOI-cancelled stage.
-      if (isRefund) {
-        const rMs = parseT(props[CONTRACT_EOI_REFUND_ENTERED_PROP]);
-        const bi = bucketOf(rMs);
-        if (bi >= 0) series.eoiRefunds[bi]++;
-      }
+      const refundBucket = bucketOf(eoiRefundMs(props));
+      if (refundBucket >= 0) series.eoiRefunds[refundBucket]++;
       const reachedUC = stage === CONTRACT_UC_STAGE || isSettlement;
       if (reachedUC) {
         let ucMs = parseT(props[`hs_v2_date_entered_${CONTRACT_UC_STAGE}`]);
