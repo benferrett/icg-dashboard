@@ -123,7 +123,11 @@ export function ConsultantsView({
           existing consultant drill-downs so it frames the review without
           changing the established DS-booking, show-up, or talk-time views. */}
       {!loading && d?.consultantScorecard && (
-        <ConsultantScorecardView scorecard={d.consultantScorecard} />
+        <ConsultantScorecardView
+          scorecard={d.consultantScorecard}
+          consultants={d.consultants}
+          periodLabel={periodLabel}
+        />
       )}
 
       {/* Performance table */}

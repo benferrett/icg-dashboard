@@ -1,5 +1,6 @@
 import { useState } from "react";
-import type { ConsultantScorecard, ScorecardLead, ScorecardRAG, ScorecardRow } from "@/lib/api";
+import type { ConsultantScorecard, Dashboard, ScorecardLead, ScorecardRAG, ScorecardRow } from "@/lib/api";
+import { scorecardOutcomes, type ScorecardOutcomes } from "@/lib/consultant-scorecard-outcomes";
 import { fmtDate, fmtNumber, fmtPct } from "@/lib/format";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -248,18 +249,52 @@ function LeadDrilldown({ state, onOpenChange }: { state: DrilldownState | null; 
   );
 }
 
-function HeroCard({ row, onOpen }: { row: ScorecardRow; onOpen: (state: DrilldownState) => void }) {
+function outcomeCount(value: number | null): string {
+  return value == null ? "—" : fmtNumber(value);
+}
+
+function outcomeRate(value: number | null): string {
+  return value == null ? "N/A" : fmtPct(value);
+}
+
+function OutcomeSummary({ outcomes, name }: { outcomes: ScorecardOutcomes; name: string }) {
+  const metrics = [
+    { key: "ds-booked", label: "Discovery Sessions Booked", value: outcomeCount(outcomes.dsBooked), detail: "Bookings made in the selected period" },
+    { key: "sit-rate", label: "Sit rate", value: outcomeRate(outcomes.sitRate), detail: `${outcomeCount(outcomes.dsSat)} sat ÷ ${outcomeCount(outcomes.dsScheduled)} scheduled` },
+    { key: "members", label: "Members", value: outcomeCount(outcomes.members), detail: "Memberships credited to this consultant" },
+    { key: "membership-conversion", label: "Membership conversion", value: outcomeRate(outcomes.membershipConversion), detail: `${outcomeCount(outcomes.members)} members ÷ ${outcomeCount(outcomes.dsSat)} sat` },
+  ];
+  return (
+    <div className="grid grid-cols-2 gap-3 border-y py-4" aria-label={`Discovery session outcomes for ${name}`}>
+      {metrics.map(metric => (
+        <div key={metric.key} className="min-w-0 rounded-md bg-muted/40 p-3" data-testid={`scorecard-${metric.key}-${name}`}>
+          <div className="text-xs font-medium text-muted-foreground">{metric.label}</div>
+          <div className="mt-2 text-xl font-semibold tabular-nums" data-testid={`scorecard-${metric.key}-value-${name}`}>{metric.value}</div>
+          <div className="mt-1 text-xs text-muted-foreground">{metric.detail}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function HeroCard({ row, outcomes, periodLabel, onOpen }: {
+  row: ScorecardRow;
+  outcomes: ScorecardOutcomes;
+  periodLabel: string;
+  onOpen: (state: DrilldownState) => void;
+}) {
   const underWorked =
     row.underWorked0Sms + row.underWorked1Sms + row.underWorked2Sms + row.underWorked3PlusSms;
   return (
-    <Card className="flex min-h-[400px] flex-col gap-6 p-8" data-testid={`scorecard-hero-${row.name}`}>
+    <Card className="flex min-h-[400px] min-w-0 flex-col gap-6 p-4 sm:p-8" data-testid={`scorecard-hero-${row.name}`}>
       <div className="flex items-start justify-between gap-3">
         <div>
-          <h3 className="text-2xl font-semibold">{row.name}</h3>
-          <p className="text-sm text-muted-foreground">{row.role} · weekly coaching view</p>
+          <h3 className="text-xl font-semibold">{row.name}</h3>
+          <p className="text-sm text-muted-foreground">{row.role} · {periodLabel}</p>
         </div>
         <RAGValue rag={row.rag.doubleTapRate} hero>{rate(row.doubleTapRate)} DT</RAGValue>
       </div>
+      <OutcomeSummary outcomes={outcomes} name={row.name} />
       <div className="grid grid-cols-3 gap-4">
         <div>
           <div className="text-5xl font-bold tabular-nums">{fmtNumber(row.dials)}</div>
@@ -344,9 +379,17 @@ function HeroCard({ row, onOpen }: { row: ScorecardRow; onOpen: (state: Drilldow
   );
 }
 
-export function ConsultantScorecardView({ scorecard }: { scorecard?: ConsultantScorecard }) {
+export function ConsultantScorecardView({
+  scorecard, consultants, periodLabel = "Selected period",
+}: {
+  scorecard?: ConsultantScorecard;
+  consultants?: Dashboard["consultants"];
+  periodLabel?: string;
+}) {
   const [drilldown, setDrilldown] = useState<DrilldownState | null>(null);
   if (!scorecard?.ok) return null;
+  const outcomesByName = new Map(consultants?.map(row => [row.name, scorecardOutcomes(row)]));
+  const outcomesFor = (name: string) => outcomesByName.get(name) ?? scorecardOutcomes();
 
   return (
     <>
@@ -360,7 +403,12 @@ export function ConsultantScorecardView({ scorecard }: { scorecard?: ConsultantS
               </h2>
             </div>
             <p className="mt-1 max-w-3xl text-sm text-muted-foreground">
-              Leading indicators for the weekly booker review: speed, persistent follow-up, and coverage before a lead goes cold.
+              Discovery session outcomes and outreach discipline for {periodLabel.toLowerCase()}.
+            </p>
+            <p className="mt-1 max-w-3xl text-xs text-muted-foreground" data-testid="scorecard-outcome-definitions">
+              Sit rate = confirmed sits ÷ scheduled sessions. Membership conversion = members ÷ confirmed sits.
+              {" "}Figures match Consultant Performance below; this is a period view, not a booking-cohort conversion.
+              {" "}Sit rate is provisional while sessions are pending or upcoming. N/A means no denominator or unavailable data.
             </p>
           </div>
           <Tooltip>
@@ -378,7 +426,7 @@ export function ConsultantScorecardView({ scorecard }: { scorecard?: ConsultantS
 
         <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
           {scorecard.rows.map((row) => (
-            <HeroCard key={row.name} row={row} onOpen={setDrilldown} />
+            <HeroCard key={row.name} row={row} outcomes={outcomesFor(row.name)} periodLabel={periodLabel} onOpen={setDrilldown} />
           ))}
         </div>
 
@@ -386,23 +434,27 @@ export function ConsultantScorecardView({ scorecard }: { scorecard?: ConsultantS
           <div className="border-b bg-muted/30 px-4 py-3">
             <div className="flex items-center gap-2">
               <PhoneCall className="h-4 w-4 text-primary" />
-              <h3 className="font-medium">Outreach discipline by consultant</h3>
+              <h3 className="font-medium">Outcomes and outreach by consultant</h3>
             </div>
             <p className="mt-0.5 text-xs text-muted-foreground">
               Booker targets: connect ≥85%, conversation ≥90%, double-tap ≥80%, dials/lead ≥8, SMS/lead ≥3.
             </p>
           </div>
-          <Table className="min-w-[2010px]">
+          <Table className="min-w-[2490px]">
             <TableHeader>
               <TableRow>
                 <TableHead className="h-11 min-w-44 px-4">Consultant</TableHead>
+                <MetricHead label="DS booked" detail="Discovery Sessions Booked: unique bookings made in the selected period, using the same consultant attribution as Consultant Performance." />
+                <MetricHead label="Sit rate %" detail="Confirmed sits divided by sessions scheduled to be held in the selected period. Not sits divided by newly created bookings. Provisional while outcomes are pending." />
+                <MetricHead label="Members" detail="The existing memberships sold figure credited to this booking consultant in Consultant Performance. This addition does not change membership attribution or date rules." />
+                <MetricHead label="Membership conversion %" detail="Members divided by confirmed sits, matching Consultant Performance. This period metric is not a same-booking-cohort conversion. N/A if no confirmed sits." />
                 <MetricHead label="Owned" detail="Contacts created in the selected period that currently belong to the consultant." />
                 <MetricHead label="Worked" detail="Distinct owned leads with an outbound call or SMS logged by this consultant in the selected period." />
                 <MetricHead label="Dials" detail="Outbound calls logged by the consultant against their owned leads in the selected period." />
                 <MetricHead label="Conn." detail="Outbound dials classified as connected. Unanswered, busy, voicemail, and wrong-number calls are not connected." />
                 <MetricHead label="Conn %" detail="Connected outbound dials divided by all outbound dials. Target: ≥85%." />
                 <MetricHead label="Spoke" detail="Distinct worked leads with at least one connected outbound call." />
-                <MetricHead label="Conv %" detail="Leads spoken to divided by leads worked. Target: ≥90%." />
+                <MetricHead label="Conversation %" detail="Leads spoken to divided by leads worked. Target: ≥90%. This is not membership conversion." />
                 <MetricHead label="Unans." detail="Unanswered outbound calls: no answer, busy, voicemail, wrong number, or another non-connected outcome." />
                 <MetricHead label="DT" detail="Unanswered calls followed by any later outbound call on the same contact within two minutes." />
                 <MetricHead label="DT %" detail="Double-tapped unanswered calls divided by all unanswered calls. Target: ≥80%." />
@@ -426,6 +478,10 @@ export function ConsultantScorecardView({ scorecard }: { scorecard?: ConsultantS
                     <div className="font-medium">{row.name}</div>
                     <div className="text-xs text-muted-foreground">{row.role}</div>
                   </TableCell>
+                  <TableCell className="px-3 text-right tabular-nums" data-testid={`scorecard-table-ds-booked-${row.name}`}>{outcomeCount(outcomesFor(row.name).dsBooked)}</TableCell>
+                  <TableCell className="px-3 text-right tabular-nums" data-testid={`scorecard-table-sit-rate-${row.name}`}>{outcomeRate(outcomesFor(row.name).sitRate)}</TableCell>
+                  <TableCell className="px-3 text-right tabular-nums" data-testid={`scorecard-table-members-${row.name}`}>{outcomeCount(outcomesFor(row.name).members)}</TableCell>
+                  <TableCell className="px-3 text-right tabular-nums" data-testid={`scorecard-table-membership-conversion-${row.name}`}>{outcomeRate(outcomesFor(row.name).membershipConversion)}</TableCell>
                   <TableCell className="px-3 text-right tabular-nums">{fmtNumber(row.ownedLeads)}</TableCell>
                   <TableCell className="px-3 text-right tabular-nums">{fmtNumber(row.workedLeads)}</TableCell>
                   <TableCell className="px-3 text-right tabular-nums">{fmtNumber(row.dials)}</TableCell>
