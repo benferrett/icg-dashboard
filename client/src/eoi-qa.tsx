@@ -55,7 +55,8 @@ function App() {
     deals: periodValue(booked * 3), showUp: periodValue(scheduled) ? Math.round(periodValue(sat) / periodValue(scheduled) * 100) : null,
     talkMs: value(3600000), bookings: [], scheduleds: [], sats: [],
     membershipDateIssues: dateIssue && name === "Akhil Venugopal"
-      ? [{ name: "Synthetic membership: original sale date missing", url: "https://example.com/" }] : [],
+      ? [{ name: "Synthetic membership: original sale date missing", url: "https://example.com/",
+        reason: "No reliable original sale date after checking linked membership deals." }] : [],
   }));
   const scorecardRows = consultants.map(c => ({
     name: c.name, role: "Booker", allocatedLeads: c.deals, ownedLeads: c.deals, workedLeads: c.deals,
@@ -81,14 +82,14 @@ function App() {
     <main className={`min-h-screen bg-background text-foreground ${dark ? "dark" : ""}`} style={{ padding: "clamp(16px,3vw,40px)" }}>
       <header className="mb-8">
         <h1 className="text-xl font-semibold">ICG Dashboard Reporting Preview</h1>
-        <p className="mt-3 text-sm text-muted-foreground">Synthetic demonstration only, separate from the live dashboard. Consultant scorecard additions are awaiting release approval.</p>
+        <p className="mt-3 text-sm text-muted-foreground">Synthetic demonstration only, separate from the live dashboard. Linked membership resolution is awaiting release approval.</p>
         <div className="mt-5 flex flex-wrap gap-2">
           {["Consultants", "Overview", "Business Performance"].map(t => <button data-testid={`preview-${t}`} key={t} onClick={() => setTab(t)} className={`border rounded-md px-4 py-2 ${tab === t ? "bg-primary text-primary-foreground" : ""}`}>{t}</button>)}
           {tab !== "Business Performance" && <select aria-label="Reporting month" data-testid="preview-month" value={month} onChange={e => setMonth(e.target.value)} className="border rounded-md px-3 bg-background">
             <option>September</option><option>October</option>
           </select>}
           <button data-testid="preview-empty" className="border rounded-md px-4 py-2" onClick={() => setEmpty(!empty)}>{empty ? "Show sample data" : "Show zero activity"}</button>
-          {tab === "Consultants" && <button data-testid="preview-date-issue" className="border rounded-md px-4 py-2" onClick={() => setDateIssue(!dateIssue)}>{dateIssue ? "Hide date review" : "Show date review"}</button>}
+          {tab === "Consultants" && <button data-testid="preview-date-issue" className="border rounded-md px-4 py-2" onClick={() => setDateIssue(!dateIssue)}>{dateIssue ? "Show resolved case" : "Show unresolved case"}</button>}
           <button data-testid="preview-theme" className="border rounded-md px-4 py-2" onClick={() => setDark(!dark)}>Toggle theme</button>
         </div>
       </header>

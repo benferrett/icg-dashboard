@@ -311,6 +311,7 @@ async function batchAssociations(
   fromType: string,
   toType: string,
   ids: string[],
+  options: { strict?: boolean } = {},
 ): Promise<Record<string, string[]>> {
   const result: Record<string, string[]> = {};
   const chunks = chunk(ids, 100);
@@ -320,12 +321,18 @@ async function batchAssociations(
     }),
   );
   for (const json of jsons) {
+    if (options.strict && (!json || json.errors?.length)) {
+      throw new Error(`Incomplete ${fromType}-to-${toType} association lookup`);
+    }
     if (!json) continue;
     for (const res of json.results || []) {
       const from = res.from?.id;
       if (!from) continue;
       result[from] = (res.to || []).map((t: any) => String(t.toObjectId));
     }
+  }
+  if (options.strict && ids.some(id => !Object.prototype.hasOwnProperty.call(result, id))) {
+    throw new Error(`Incomplete ${fromType}-to-${toType} association lookup`);
   }
   return result;
 }
@@ -335,6 +342,7 @@ async function batchRead(
   objectType: string,
   ids: string[],
   properties: string[],
+  options: { strict?: boolean } = {},
 ): Promise<Record<string, Record<string, string | undefined>>> {
   const out: Record<string, Record<string, string | undefined>> = {};
   const chunks = chunk(ids, 100);
@@ -345,8 +353,14 @@ async function batchRead(
     }),
   );
   for (const json of jsons) {
+    if (options.strict && (!json || json.errors?.length)) {
+      throw new Error(`Incomplete ${objectType} property lookup`);
+    }
     if (!json) continue;
     for (const r of json.results || []) out[r.id] = r.properties;
+  }
+  if (options.strict && ids.some(id => !Object.prototype.hasOwnProperty.call(out, id))) {
+    throw new Error(`Incomplete ${objectType} property lookup`);
   }
   return out;
 }

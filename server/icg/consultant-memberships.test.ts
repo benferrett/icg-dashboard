@@ -73,7 +73,8 @@ test("September counts paid sales from older leads and keeps refunded sales in t
     assert.ok(JSON.stringify(query.filterGroups).includes(MEMBERSHIP_REFUND_STAGE));
     return [...records, records[0]]; // overlapping search groups cannot double-count
   });
-  t.mock.method(hubspot, "batchAssociations", async () => ({ recovered: ["client"] }));
+  t.mock.method(hubspot, "batchAssociations", async (_from: string, to: string, ids: string[]) =>
+    to === "deals" ? Object.fromEntries(ids.map(id => [id, []])) : { recovered: ["client"] });
   t.mock.method(hubspot, "batchReadWithHistory", async () => ({
     client: { hubspot_owner_id: [{ value: "366721097", timestamp: "2026-08-01" }] },
   }));

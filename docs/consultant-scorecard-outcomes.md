@@ -26,6 +26,21 @@ For a refunded deal missing its paid date, original sold-stage history is
 preferred; Close Date qualifies only if it demonstrably predates cancellation.
 Otherwise the record is flagged in a linked, all-dates review list above the
 scorecard and excluded from period counts, rather than guessed into a month.
+Before this warning is generated, opportunities and undated candidates have
+their explicit deal-to-deal associations checked. A single clear linked
+membership replaces the source for reporting, using that membership's date
+and booking-consultant credit. The final collection is deduplicated by
+membership deal ID, including when the membership was already in the query.
+Linked records outside the initial query are batch-read with the same fields.
+No CRM field is edited and no date is copied onto a property opportunity.
+Membership identity requires the membership pipeline, a membership record
+name (not a property/SMSF/personal opportunity), and sale evidence. Customer
+name similarity and shared household contacts are not identity evidence.
+Ambiguous links remain in review and the ambiguous source is not counted as
+an extra membership. If the linked membership itself lacks a reliable date,
+the warning points to that membership, once. Cyclic undated links do not
+manufacture a resolved date. Failed/partial CRM retrieval fails explicitly,
+rather than falsely stating that no linked membership or sale date exists.
 The query includes paid-date membership deals that have moved beyond sold
 stages, and deduplicates by deal ID. It refuses truncated 10,000-record results.
 Booking Consultant takes precedence; missing valid booking-consultant credit
@@ -33,7 +48,7 @@ is recovered from the earliest known booking-consultant contact-owner history,
 consistent with DS attribution. Current owner is not sales credit. Unresolved
 memberships appear in the separate Unattributed reconciliation row.
 The five-person scorecard roster does not expand to include that row.
-Old dashboard snapshots are invalidated via `_consultantMembershipVersion: 1`.
+Old dashboard snapshots are invalidated via `_consultantMembershipVersion: 2`.
 This correction is scoped to the Consultants page and scorecard; unrelated
 membership calculations on other dashboard tabs are not silently redefined.
 Period gross members divided by period sits is not a same-booking-cohort conversion,
@@ -51,6 +66,10 @@ rather than incorrectly saying weekly when a month/custom range is selected.
 - Check zero denominators, actual zero conversion and missing-row handling.
 - Confirm the original-sale-date review warning displays without adding an
   undated membership to any period's gross sales or conversion.
+- Confirm an opportunity linked to a July membership refunded in September
+  produces one July gross membership, no September sale and no false warning.
+- Cover missing initial-query targets, multiple opportunities, ambiguous links,
+  still-undated linked memberships, unrelated/referral/test links and API failure.
 - Check desktop/mobile, light/dark and horizontal table scrolling.
 - Confirm the existing zero-touch drilldown still opens and closes.
 - Run unit tests and the production build. The pre-existing backend TypeScript

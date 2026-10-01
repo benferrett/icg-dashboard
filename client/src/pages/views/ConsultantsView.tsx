@@ -119,19 +119,24 @@ export function ConsultantsView({
           {" "}It is provisional while outcomes are awaiting confirmation or sessions are upcoming.
           {" "}Missing CRM updates are not treated as confirmed no-shows.
           {" "}Members are gross sales by membership paid date (verified original sale date if unavailable), retained after later refunds.
+          {" "}Linked membership deals are resolved before date review and counted once.
         </p>
       )}
       {!loading && membershipDateIssues.length > 0 && (
         <Card className="border-amber-500/40 p-4" data-testid="consultant-membership-date-warning" role="status">
-          <p className="text-sm font-medium">Original membership sale date needs review</p>
+          <p className="text-sm font-medium">Membership record needs review</p>
           <p className="mt-1 text-sm text-muted-foreground">
-            {membershipDateIssues.length} membership record{membershipDateIssues.length === 1 ? " has" : "s have"} no reliable original sale date
-            and cannot be assigned to a reporting period. These records are excluded from Members and conversion;
+            {membershipDateIssues.length} record{membershipDateIssues.length === 1 ? " remains" : "s remain"} unresolved
+            after checking linked membership deals. The original sale date or membership link needs confirmation.
+            These records are excluded from Members and conversion;
             the list is across all dates, not just the selected period.
           </p>
           <ul className="mt-2 space-y-1 text-sm">
             {membershipDateIssues.map(issue => (
-              <li key={issue.url}><a className="underline" href={issue.url} target="_blank" rel="noreferrer">{issue.name}</a> · {issue.consultant}</li>
+              <li key={issue.url}>
+                <a className="underline" href={issue.url} target="_blank" rel="noreferrer">{issue.name}</a> · {issue.consultant}
+                {issue.reason && <span className="block text-xs text-muted-foreground">{issue.reason}</span>}
+              </li>
             ))}
           </ul>
         </Card>
