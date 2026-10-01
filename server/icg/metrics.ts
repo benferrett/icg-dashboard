@@ -12,6 +12,7 @@ import {
   Granularity,
 } from "./period";
 import { consultantScorecard } from "./consultant-scorecard";
+import { consultantMembershipSummary } from "./consultant-memberships";
 import {
   ownerName,
   pipelineName,
@@ -1397,9 +1398,9 @@ async function salesFunnel(range: PeriodRange) {
 //     figure shown in "Lead contact by consultant"; sums to headline new leads).
 //   - DS booked = the consultant's attributed DS bookings (bookedByConsultant),
 //     i.e. the same DS meetings the headline DS-booked total counts.
-//   - Sold = memberships the consultant booked, from consultant-pipeline deals
-//     in the period whose booking_consultant is this consultant.
-async function consultantTeam(
+//   - Sold = gross paid-date memberships credited to the original booker,
+//     retained after a later refund. Missing credit stays Unattributed.
+export async function consultantTeam(
   range: PeriodRange,
   bookedByConsultant: Record<string, number> = {},
   funnelConsultants: FunnelConsultant[] = [],
@@ -1410,31 +1411,8 @@ async function consultantTeam(
   scheduledsByConsultant: Record<string, AttendanceItem[]> = {},
   talkTimeByConsultant: Record<string, number> = {},
 ) {
-  // Memberships sold per booking consultant (deals created in the period).
-  const deals = await hubspot.searchDeals(
-    {
-      filterGroups: [
-        {
-          filters: [
-            { propertyName: "createdate", operator: "GTE", value: range.start },
-            { propertyName: "createdate", operator: "LT", value: range.end },
-          ],
-        },
-      ],
-      properties: ["booking_consultant", "dealstage", "hubspot_owner_id", "createdate"],
-      sorts: [{ propertyName: "createdate", direction: "DESCENDING" }],
-    },
-    5000,
-  );
-  const soldByConsultant: Record<string, number> = {};
-  for (const d of deals) {
-    const c = d.properties.booking_consultant || d.properties.hubspot_owner_id;
-    if (!c || !isBookingConsultant(c)) continue; // consultants only
-    if (MEMBERSHIP_SOLD_STAGES.includes(d.properties.dealstage || "")) {
-      const n = ownerName(c);
-      soldByConsultant[n] = (soldByConsultant[n] || 0) + 1;
-    }
-  }
+  const membershipSummary = await consultantMembershipSummary(range);
+  const soldByConsultant = membershipSummary.counts;
 
   // Leads per consultant come straight from the contact funnel so the figure
   // matches "Lead contact by consultant" exactly.
@@ -1454,6 +1432,8 @@ async function consultantTeam(
   // the row makes every consultant column reconcile exactly with Overview.
   const names = Array.from(new Set(Object.values(BOOKING_CONSULTANTS)));
   const hasUnattributed =
+    (membershipSummary.undatedByConsultant["Unattributed"]?.length || 0) > 0 ||
+    (soldByConsultant["Unattributed"] || 0) > 0 ||
     (bookedByConsultant["Unattributed"] || 0) > 0 ||
     (scheduledByConsultant["Unattributed"] || 0) > 0 ||
     (satByConsultant["Unattributed"] || 0) > 0;
@@ -1478,6 +1458,7 @@ async function consultantTeam(
         dsSat,
         showUp,
         sold: soldByConsultant[name] || 0,
+        membershipDateIssues: membershipSummary.undatedByConsultant[name] || [],
         // Total connected talk time (ms) for the period, from calls this
         // consultant owns with duration >= 30s. Rendered as h:mm in the UI.
         talkMs: talkTimeByConsultant[name] || 0,

@@ -13,6 +13,7 @@ function App() {
   const [month, setMonth] = useState("September");
   const [empty, setEmpty] = useState(false);
   const [dark, setDark] = useState(false);
+  const [dateIssue, setDateIssue] = useState(false);
   const value = (n: number) => empty ? 0 : n;
   const client = useMemo(() => {
     const q = new QueryClient({ defaultOptions: { queries: { staleTime: Infinity, retry: false, enabled: false } } });
@@ -53,6 +54,8 @@ function App() {
     name, dsBooked: periodValue(booked), dsScheduled: periodValue(scheduled), dsSat: periodValue(sat), sold: periodValue(sold),
     deals: periodValue(booked * 3), showUp: periodValue(scheduled) ? Math.round(periodValue(sat) / periodValue(scheduled) * 100) : null,
     talkMs: value(3600000), bookings: [], scheduleds: [], sats: [],
+    membershipDateIssues: dateIssue && name === "Akhil Venugopal"
+      ? [{ name: "Synthetic membership: original sale date missing", url: "https://example.com/" }] : [],
   }));
   const scorecardRows = consultants.map(c => ({
     name: c.name, role: "Booker", allocatedLeads: c.deals, ownedLeads: c.deals, workedLeads: c.deals,
@@ -67,7 +70,7 @@ function App() {
     drilldowns: { zeroTouch: [], underWorked: { zero: [], one: [], two: [], threePlus: [] }, slowTouch: [], missedDoubleTaps: [] },
   }));
   const d: any = {
-    consultants, consultantScorecard: { ok: true, sourceNote: "Synthetic demonstration data only. Live calculations are unchanged.", rows: scorecardRows },
+    consultants, consultantScorecard: { ok: true, sourceNote: "Synthetic demonstration data only. Members represent gross sales by paid date.", rows: scorecardRows },
     salesFunnel: { ok: true, window: win }, embr: { period: { leads: value(120) } },
     contracts: { funnel: [
       { key: "eoi", count: value(september ? 16 : 0), value: value(september ? 8000000 : 0) },
@@ -85,6 +88,7 @@ function App() {
             <option>September</option><option>October</option>
           </select>}
           <button data-testid="preview-empty" className="border rounded-md px-4 py-2" onClick={() => setEmpty(!empty)}>{empty ? "Show sample data" : "Show zero activity"}</button>
+          {tab === "Consultants" && <button data-testid="preview-date-issue" className="border rounded-md px-4 py-2" onClick={() => setDateIssue(!dateIssue)}>{dateIssue ? "Hide date review" : "Show date review"}</button>}
           <button data-testid="preview-theme" className="border rounded-md px-4 py-2" onClick={() => setDark(!dark)}>Toggle theme</button>
         </div>
       </header>

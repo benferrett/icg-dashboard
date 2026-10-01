@@ -261,7 +261,7 @@ function OutcomeSummary({ outcomes, name }: { outcomes: ScorecardOutcomes; name:
   const metrics = [
     { key: "ds-booked", label: "Discovery Sessions Booked", value: outcomeCount(outcomes.dsBooked), detail: "Bookings made in the selected period" },
     { key: "sit-rate", label: "Sit rate", value: outcomeRate(outcomes.sitRate), detail: `${outcomeCount(outcomes.dsSat)} sat ÷ ${outcomeCount(outcomes.dsScheduled)} scheduled` },
-    { key: "members", label: "Members", value: outcomeCount(outcomes.members), detail: "Memberships credited to this consultant" },
+    { key: "members", label: "Members", value: outcomeCount(outcomes.members), detail: "Gross sales by membership paid date" },
     { key: "membership-conversion", label: "Membership conversion", value: outcomeRate(outcomes.membershipConversion), detail: `${outcomeCount(outcomes.members)} members ÷ ${outcomeCount(outcomes.dsSat)} sat` },
   ];
   return (
@@ -406,7 +406,8 @@ export function ConsultantScorecardView({
               Discovery session outcomes and outreach discipline for {periodLabel.toLowerCase()}.
             </p>
             <p className="mt-1 max-w-3xl text-xs text-muted-foreground" data-testid="scorecard-outcome-definitions">
-              Sit rate = confirmed sits ÷ scheduled sessions. Membership conversion = members ÷ confirmed sits.
+              Sit rate = confirmed sits ÷ scheduled sessions. Membership conversion = gross members ÷ confirmed sits.
+              {" "}Members use membership paid date (verified original sale date if unavailable) and include later refunds.
               {" "}Figures match Consultant Performance below; this is a period view, not a booking-cohort conversion.
               {" "}Sit rate is provisional while sessions are pending or upcoming. N/A means no denominator or unavailable data.
             </p>
@@ -446,8 +447,8 @@ export function ConsultantScorecardView({
                 <TableHead className="h-11 min-w-44 px-4">Consultant</TableHead>
                 <MetricHead label="DS booked" detail="Discovery Sessions Booked: unique bookings made in the selected period, using the same consultant attribution as Consultant Performance." />
                 <MetricHead label="Sit rate %" detail="Confirmed sits divided by sessions scheduled to be held in the selected period. Not sits divided by newly created bookings. Provisional while outcomes are pending." />
-                <MetricHead label="Members" detail="The existing memberships sold figure credited to this booking consultant in Consultant Performance. This addition does not change membership attribution or date rules." />
-                <MetricHead label="Membership conversion %" detail="Members divided by confirmed sits, matching Consultant Performance. This period metric is not a same-booking-cohort conversion. N/A if no confirmed sits." />
+                <MetricHead label="Members" detail="Gross memberships credited to the original booker by membership paid date, with verified original sale dates as legacy fallbacks. Later refunds remain in the original sale period. Referrals, tests and records with no reliable sale date are excluded." />
+                <MetricHead label="Membership conversion %" detail="Gross members divided by confirmed sits, matching Consultant Performance. This period metric is not a same-booking-cohort conversion. N/A if no confirmed sits." />
                 <MetricHead label="Owned" detail="Contacts created in the selected period that currently belong to the consultant." />
                 <MetricHead label="Worked" detail="Distinct owned leads with an outbound call or SMS logged by this consultant in the selected period." />
                 <MetricHead label="Dials" detail="Outbound calls logged by the consultant against their owned leads in the selected period." />

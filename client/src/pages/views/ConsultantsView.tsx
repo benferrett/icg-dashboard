@@ -44,6 +44,8 @@ export function ConsultantsView({
   const totalSat = d?.consultants.reduce((s, c) => s + c.dsSat, 0) ?? 0;
   const totalSold = d?.consultants.reduce((s, c) => s + c.sold, 0) ?? 0;
   const totalTalkMs = d?.consultants.reduce((s, c) => s + (c.talkMs || 0), 0) ?? 0;
+  const membershipDateIssues = d?.consultants.flatMap(c =>
+    (c.membershipDateIssues || []).map(issue => ({ ...issue, consultant: c.name }))) || [];
   // Show-up rate = sat / SCHEDULED (of the sessions meant to be held this
   // period, what share sat).
   const showUp = totalScheduled
@@ -96,15 +98,15 @@ export function ConsultantsView({
               testId="consultant-total-talktime"
             />
             <Stat
-              label={`Memberships sold · ${periodLabel.toLowerCase()}`}
+              label={`Gross members · ${periodLabel.toLowerCase()}`}
               value={fmtNumber(totalSold)}
-              sub="from their bookings"
+              sub="by membership paid date"
               testId="consultant-total-sold"
             />
             <Stat
               label="Conversion to membership"
               value={convToMembership == null ? "—" : `${convToMembership}%`}
-              sub="sold / DS sat"
+              sub="gross members / DS sat"
               testId="consultant-conversion"
               accent
             />
@@ -116,7 +118,23 @@ export function ConsultantsView({
           Show-up rate = confirmed sat ÷ all scheduled clients in this period.
           {" "}It is provisional while outcomes are awaiting confirmation or sessions are upcoming.
           {" "}Missing CRM updates are not treated as confirmed no-shows.
+          {" "}Members are gross sales by membership paid date (verified original sale date if unavailable), retained after later refunds.
         </p>
+      )}
+      {!loading && membershipDateIssues.length > 0 && (
+        <Card className="border-amber-500/40 p-4" data-testid="consultant-membership-date-warning" role="status">
+          <p className="text-sm font-medium">Original membership sale date needs review</p>
+          <p className="mt-1 text-sm text-muted-foreground">
+            {membershipDateIssues.length} membership record{membershipDateIssues.length === 1 ? " has" : "s have"} no reliable original sale date
+            and cannot be assigned to a reporting period. These records are excluded from Members and conversion;
+            the list is across all dates, not just the selected period.
+          </p>
+          <ul className="mt-2 space-y-1 text-sm">
+            {membershipDateIssues.map(issue => (
+              <li key={issue.url}><a className="underline" href={issue.url} target="_blank" rel="noreferrer">{issue.name}</a> · {issue.consultant}</li>
+            ))}
+          </ul>
+        </Card>
       )}
 
       {/* Weekly outreach coaching scorecard — deliberately placed above the
@@ -146,7 +164,7 @@ export function ConsultantsView({
                 <TableHead className="text-right">DS sat</TableHead>
                 <TableHead className="text-right">DS sat %</TableHead>
                 <TableHead className="text-right">Talk time</TableHead>
-                <TableHead className="text-right">Sold</TableHead>
+                <TableHead className="text-right">Gross members</TableHead>
                 <TableHead className="text-right">Conversion %</TableHead>
               </TableRow>
             </TableHeader>
