@@ -20,9 +20,9 @@ export function OverviewView({
   return (
     <div className="flex flex-col gap-8">
       {/* KPI ROW */}
-      <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">
         {loading || !d ? (
-          Array.from({ length: 7 }).map((_, i) => (
+          Array.from({ length: 8 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-lg" />
           ))
         ) : (
@@ -80,7 +80,7 @@ export function OverviewView({
                   accent
                 />
                 <Stat
-                  label={`EOI · ${periodLabel.toLowerCase()}`}
+                  label={`Gross EOIs · ${periodLabel.toLowerCase()}`}
                   value={fmtNumber(
                     d.contracts.funnel.find((s) => s.key === "eoi")?.count ?? 0,
                   )}
@@ -90,6 +90,12 @@ export function OverviewView({
                   )}
                   testId="stat-eoi-sales"
                   accent
+                />
+                <Stat
+                  label={`EOI refunds · ${periodLabel.toLowerCase()}`}
+                  value={fmtNumber(d.contracts.eoiRefunds ?? 0)}
+                  sub="By cancellation date"
+                  testId="stat-eoi-refunds"
                 />
                 <Stat
                   label={`UC sales · ${periodLabel.toLowerCase()}`}
@@ -108,6 +114,11 @@ export function OverviewView({
           })()
         )}
       </div>
+      <p className="-mt-5 text-xs text-muted-foreground" data-testid="eoi-reporting-note">
+        Gross EOIs count every recorded EOI in its original month, including later
+        cancellations. Refunds are shown separately in the month of cancellation;
+        they do not reduce gross EOIs.
+      </p>
 
       {/* DS SAT RATE (SHOW-UP) */}
       <Section

@@ -241,6 +241,9 @@ export interface ContractsData {
   byStrategist: ContractStrategistRow[];
   // EOI / UC milestone counts split by the client's lead source (EMBR/META).
   eoiBySource: { EMBR: number; META: number };
+  eoiRefunds: number;
+  eoiRefundsBySource: { EMBR: number; META: number };
+  refunds: ContractDeal[];
   ucBySource: { EMBR: number; META: number };
   steps: { key: string; label: string }[];
   recent: ContractDeal[];
@@ -259,6 +262,7 @@ export interface ContractDeal {
   // Milestone dates (cumulative): when the deal reached EOI / UC. A deal may
   // carry both (it did EOI then progressed to UC).
   eoiDate?: string;
+  refundDate?: string;
   ucDate?: string;
   reachedUC?: boolean;
 }
@@ -330,6 +334,7 @@ export interface BizPerfRow {
   sats: number;
   members: number;
   eois: number;
+  eoiRefunds: number;
   uc: number;
 }
 
