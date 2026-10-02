@@ -70,7 +70,7 @@ const TTL_MS = 5 * 60 * 1000; // a snapshot older than this is considered stale
 const ATTENDANCE_VERSION = 2;
 function currentSnapshot(key: string, data: any) {
   if (key === "ar:invoices") return data?._arReceiptVersion === 1;
-  if (key.startsWith("dashboard:") && data?._consultantMembershipVersion !== 1) return false;
+  if (key.startsWith("dashboard:") && data?._consultantMembershipVersion !== 2) return false;
   if (/^(dashboard:|bizperf:|report2026:)/.test(key) && data?._eoiReportingVersion !== 1) return false;
   return !/^(dashboard:|bizperf:|report2026:|marketing-beta:)/.test(key) ||
     data?._attendanceVersion === ATTENDANCE_VERSION;
@@ -78,7 +78,7 @@ function currentSnapshot(key: string, data: any) {
 
 // Persist + record a freshly computed payload in both memory and on disk.
 function store(key: string, data: any, fn: () => Promise<any>, computedAt: number) {
-  data = { ...data, _attendanceVersion: ATTENDANCE_VERSION, _eoiReportingVersion: 1, _consultantMembershipVersion: 1 };
+  data = { ...data, _attendanceVersion: ATTENDANCE_VERSION, _eoiReportingVersion: 1, _consultantMembershipVersion: 2 };
   cache.set(key, { data, computedAt, fn });
   writeSnapshot(key, data, computedAt);
 }

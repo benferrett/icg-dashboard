@@ -116,7 +116,7 @@ export interface Dashboard {
     showUp: number | null;
     sold: number;
     talkMs: number;
-    membershipDateIssues?: { name: string; url: string }[];
+    membershipDateIssues?: { name: string; url: string; reason?: string }[];
     bookings: { client: string; date: string }[];
     scheduleds: import("@shared/attendance").AttendanceItem[];
     sats: { client: string; date: string }[];
