@@ -55,6 +55,9 @@ import {
   DS_TITLE_PREFIX,
   MEMBERSHIP_REFUND_STAGE,
   MEMBERSHIP_SOLD_STAGES,
+  ownerName,
+  pipelineName,
+  stageName,
 } from "./reference";
 import { parseLeadMonth, type CohortRange } from "./marketing-beta";
 
@@ -71,6 +74,7 @@ const DS_STAGE_SAT = new Set<string>(DS_SAT_STAGES);
 
 const DEAL_PROPS = Array.from(new Set([
   "dealname", "dealstage", "pipeline", "closedate", "createdate", "amount",
+  "amount_in_home_currency", "strategist",
   "booking_consultant", "hubspot_owner_id", "membership_paid_date",
   `hs_v2_date_entered_2872614380`,
   `hs_v2_date_entered_${MEMBERSHIP_REFUND_STAGE}`,
@@ -114,6 +118,25 @@ export interface CohortOutcome {
   refunded?: boolean;
 }
 
+// One property deal (EOI and/or UC) from the cohort, for the month detail view.
+export interface CohortPropertyDeal {
+  dealId: string;
+  dealName: string;
+  dealUrl: string;
+  client: string;
+  contactUrl: string;
+  channel: Channel;
+  stage: string;
+  pipeline: string;
+  strategist?: string;
+  amount: number | null;
+  status: "uc" | "open" | "cancelled";
+  eoiDate?: string;
+  ucDate?: string;
+  daysLeadToEoi?: number;
+  daysEoiToUc?: number;
+}
+
 export interface CohortMonth {
   month: string; // YYYY-MM
   label: string;
@@ -126,6 +149,7 @@ export interface CohortMonth {
   embr: CohortStats;
   total: CohortStats;
   outcomes: CohortOutcome[];
+  propertyDeals: CohortPropertyDeal[];
 }
 
 export interface MarketingNewPayload {
@@ -374,8 +398,8 @@ export async function marketingNew(now = Date.now()): Promise<MarketingNewPayloa
   const canonicalProps = new Map(canonical.map((d) => [d.id, d.properties]));
 
   // 5. Roll up.
-  const byMonth = new Map<string, { META: Counts; EMBR: Counts; outcomes: CohortOutcome[] }>();
-  for (const k of monthKeys) byMonth.set(k, { META: zero(), EMBR: zero(), outcomes: [] });
+  const byMonth = new Map<string, { META: Counts; EMBR: Counts; outcomes: CohortOutcome[]; propertyDeals: CohortPropertyDeal[] }>();
+  for (const k of monthKeys) byMonth.set(k, { META: zero(), EMBR: zero(), outcomes: [], propertyDeals: [] });
   for (const lead of Array.from(leads.values())) {
     const b = byMonth.get(lead.month)![lead.channel];
     const f = funnel.get(lead.id)!;
@@ -419,6 +443,23 @@ export async function marketingNew(now = Date.now()): Promise<MarketingNewPayloa
       m[lead.channel].uc++;
       m.outcomes.push(outcome(lead, "uc", dealId, p, ucMs));
     }
+    if (Number.isFinite(eoiMs) || Number.isFinite(ucMs)) {
+      const iso = (t: number) => (Number.isFinite(t) ? new Date(t).toISOString() : undefined);
+      const days = (a: number, b: number) =>
+        Number.isFinite(a) && Number.isFinite(b) && b >= a ? Math.round((b - a) / 86400000) : undefined;
+      const amt = Number(p.amount_in_home_currency || p.amount);
+      m.propertyDeals.push({
+        dealId, dealName: p.dealname || dealId, dealUrl: `${HS}/0-3/${dealId}`,
+        client: lead.name, contactUrl: `${HS}/0-1/${lead.id}`, channel: lead.channel,
+        stage: stageName(p.dealstage), pipeline: pipelineName(p.pipeline),
+        strategist: p.strategist ? ownerName(p.strategist) : undefined,
+        amount: Number.isFinite(amt) && amt > 0 ? amt : null,
+        status: Number.isFinite(ucMs) ? "uc" : p.dealstage === CONTRACT_EOI_REFUND_STAGE ? "cancelled" : "open",
+        eoiDate: iso(eoiMs), ucDate: iso(ucMs),
+        daysLeadToEoi: days(lead.createdMs, eoiMs),
+        daysEoiToUc: days(eoiMs, ucMs),
+      });
+    }
   }
 
   const months: CohortMonth[] = cohorts.map((c, i) => {
@@ -439,6 +480,8 @@ export async function marketingNew(now = Date.now()): Promise<MarketingNewPayloa
       embr: finalizeCohort(m.EMBR),
       total: finalizeCohort(add(m.META, m.EMBR)),
       outcomes: m.outcomes,
+      propertyDeals: m.propertyDeals.sort((a, b) =>
+        (a.eoiDate || a.ucDate || "").localeCompare(b.eoiDate || b.ucDate || "")),
     };
   });
 

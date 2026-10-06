@@ -216,7 +216,7 @@ async function warmCache() {
     }
     // Keep the Marketing NEW monthly cohort table warm.
     try {
-      await warmKey("marketing-new:v1", () => marketingNew());
+      await warmKey("marketing-new:v2", () => marketingNew());
     } catch (e) {
       console.error("[warm] marketing-new failed:", (e as any)?.message);
     }
@@ -416,7 +416,7 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
   app.get("/api/marketing-new", requireAuth, async (req, res) => {
     try {
       const force = req.query.refresh === "1";
-      const data = await cached("marketing-new:v1", () => marketingNew(), force);
+      const data = await cached("marketing-new:v2", () => marketingNew(), force);
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to build marketing cohorts" });

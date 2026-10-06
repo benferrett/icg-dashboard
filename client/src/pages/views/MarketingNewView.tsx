@@ -49,6 +49,7 @@ import {
   Table2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { MarketingNewMonthDetail } from "./MarketingNewMonthDetail";
 
 type ChannelKey = "total" | "meta" | "embr";
 const CHANNELS: { key: ChannelKey; label: string }[] = [
@@ -378,6 +379,10 @@ export function MarketingNewView({ token }: { token: string }) {
           </Card>
         )}
       </Section>
+
+      {d?.ok && (
+        <MarketingNewMonthDetail data={d} channel={channel} channelLabel={channelLabel} />
+      )}
 
       <Section
         title={`CPL, CAC and UC CAC by lead month — ${channelLabel}`}
