@@ -519,3 +519,63 @@ export type MarketingBeta =
       cohort: MarketingBetaCohortRange;
       error: string;
     };
+
+// ---- Marketing NEW (monthly lead cohorts, leads → UC) ---------------------
+// See server/icg/marketing-new.ts for definitions.
+export interface MarketingNewStats {
+  spend: number;
+  leads: number;
+  cpl: number | null;
+  booked: number;
+  leadToBooked: number | null;
+  scheduled: number;
+  sat: number;
+  showRate: number | null;
+  members: number;
+  dsToMember: number | null;
+  cac: number | null;
+  eoiDeals: number;
+  eoiClients: number;
+  memberToEoi: number | null;
+  uc: number;
+  ucCac: number | null;
+}
+
+export interface MarketingNewOutcome {
+  type: "member" | "eoi" | "uc";
+  channel: "META" | "EMBR";
+  client: string;
+  contactUrl: string;
+  dealName: string;
+  dealUrl: string;
+  date?: string;
+  daysFromLead?: number;
+  refunded?: boolean;
+}
+
+export interface MarketingNewMonth {
+  month: string;
+  label: string;
+  start: string;
+  end: string;
+  maturingDaysLeft: number;
+  metaSpendStatus: "ok" | "error";
+  metaSpendMessage?: string;
+  meta: MarketingNewStats;
+  embr: MarketingNewStats;
+  total: MarketingNewStats;
+  outcomes: MarketingNewOutcome[];
+}
+
+export interface MarketingNew {
+  ok: true;
+  generatedAt: string;
+  embrCpl: number;
+  months: MarketingNewMonth[];
+  totals: { meta: MarketingNewStats; embr: MarketingNewStats; total: MarketingNewStats };
+  cached?: boolean;
+  computedAt?: string;
+  cacheAgeSec?: number;
+  stale?: boolean;
+  updating?: boolean;
+}

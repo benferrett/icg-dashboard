@@ -6,6 +6,7 @@ import { buildDashboard, businessPerformance, monthlyReport2026, forecast } from
 import { parsePeriod, parseCustomRange } from "./icg/period";
 import { metaAds } from "./icg/meta";
 import { marketingBeta, parseLeadMonth } from "./icg/marketing-beta";
+import { marketingNew } from "./icg/marketing-new";
 import {
   readSnapshot,
   writeSnapshot,
@@ -72,7 +73,7 @@ function currentSnapshot(key: string, data: any) {
   if (key === "ar:invoices") return data?._arReceiptVersion === 1;
   if (key.startsWith("dashboard:") && data?._consultantMembershipVersion !== 2) return false;
   if (/^(dashboard:|bizperf:|report2026:)/.test(key) && data?._eoiReportingVersion !== 1) return false;
-  return !/^(dashboard:|bizperf:|report2026:|marketing-beta:)/.test(key) ||
+  return !/^(dashboard:|bizperf:|report2026:|marketing-beta:|marketing-new:)/.test(key) ||
     data?._attendanceVersion === ATTENDANCE_VERSION;
 }
 
@@ -212,6 +213,12 @@ async function warmCache() {
       await warmKey("forecast", () => forecast());
     } catch (e) {
       console.error("[warm] forecast failed:", (e as any)?.message);
+    }
+    // Keep the Marketing NEW monthly cohort table warm.
+    try {
+      await warmKey("marketing-new:v1", () => marketingNew());
+    } catch (e) {
+      console.error("[warm] marketing-new failed:", (e as any)?.message);
     }
     // Keep both business-performance granularities warm (independent of period).
     for (const g of ["week", "month"] as const) {
@@ -400,6 +407,19 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to build marketing beta" });
+    }
+  });
+
+  // Marketing NEW — monthly lead cohorts (Jan 2026 → now), each month's leads
+  // followed forward for all time: spend, CPL, lead→DS booked, show rate,
+  // DS→member, CAC, member→EOI, UC and UC CAC. See server/icg/marketing-new.ts.
+  app.get("/api/marketing-new", requireAuth, async (req, res) => {
+    try {
+      const force = req.query.refresh === "1";
+      const data = await cached("marketing-new:v1", () => marketingNew(), force);
+      res.json(data);
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to build marketing cohorts" });
     }
   });
 
