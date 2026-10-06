@@ -19,6 +19,7 @@ import {
   LayoutDashboard,
   Megaphone,
   FlaskConical,
+  Sparkles,
   Users,
   Target,
   FileSignature,
@@ -36,6 +37,7 @@ import { useState, useEffect } from "react";
 import { OverviewView } from "./views/OverviewView";
 import { MarketingView } from "./views/MarketingView";
 import { MarketingBetaView } from "./views/MarketingBetaView";
+import { MarketingNewView } from "./views/MarketingNewView";
 import { ConsultantsView } from "./views/ConsultantsView";
 import { StrategistsView } from "./views/StrategistsView";
 import { ContractsView } from "./views/ContractsView";
@@ -50,6 +52,7 @@ type TabKey =
   | "overview"
   | "marketing"
   | "marketing_beta"
+  | "marketing_new"
   | "funnel"
   | "consultants"
   | "strategists"
@@ -68,6 +71,7 @@ const SELF_WINDOWED_TABS: TabKey[] = [
   "report2026",
   "forecasting",
   "marketing_beta",
+  "marketing_new",
   "accounts_receivable",
   "membership_payments",
 ];
@@ -79,6 +83,11 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
     key: "marketing_beta",
     label: "Marketing BETA",
     icon: <FlaskConical className="h-4 w-4" />,
+  },
+  {
+    key: "marketing_new",
+    label: "Marketing NEW",
+    icon: <Sparkles className="h-4 w-4" />,
   },
   {
     key: "funnel",
@@ -384,6 +393,7 @@ export default function DashboardPage({
             <ContractsView d={d} loading={loading} periodLabel={periodLabel} />
           )}
           {tab === "marketing_beta" && <MarketingBetaView token={token} />}
+          {tab === "marketing_new" && <MarketingNewView token={token} />}
           {tab === "business" && <BusinessPerformanceView token={token} />}
           {tab === "report2026" && <Report2026View token={token} />}
           {tab === "forecasting" && <ForecastingView token={token} />}
