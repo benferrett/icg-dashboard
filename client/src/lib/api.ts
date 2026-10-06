@@ -553,6 +553,24 @@ export interface MarketingNewOutcome {
   refunded?: boolean;
 }
 
+export interface MarketingNewPropertyDeal {
+  dealId: string;
+  dealName: string;
+  dealUrl: string;
+  client: string;
+  contactUrl: string;
+  channel: "META" | "EMBR";
+  stage: string;
+  pipeline: string;
+  strategist?: string;
+  amount: number | null;
+  status: "uc" | "open" | "cancelled";
+  eoiDate?: string;
+  ucDate?: string;
+  daysLeadToEoi?: number;
+  daysEoiToUc?: number;
+}
+
 export interface MarketingNewMonth {
   month: string;
   label: string;
@@ -565,6 +583,7 @@ export interface MarketingNewMonth {
   embr: MarketingNewStats;
   total: MarketingNewStats;
   outcomes: MarketingNewOutcome[];
+  propertyDeals: MarketingNewPropertyDeal[];
 }
 
 export interface MarketingNew {
