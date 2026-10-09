@@ -22,8 +22,8 @@ import { TrendingUp, BarChart3, Table2 } from "lucide-react";
 import { useState } from "react";
 import {
   ResponsiveContainer,
-  LineChart,
-  Line,
+  BarChart,
+  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -141,8 +141,10 @@ export function BusinessPerformanceView({ token }: { token: string }) {
             <Card className="p-4">
               <div className="h-[360px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <LineChart
+                  <BarChart
                     data={rows}
+                    barCategoryGap="18%"
+                    barGap={1}
                     margin={{ top: 8, right: 12, left: -8, bottom: 4 }}
                   >
                     <CartesianGrid
@@ -165,25 +167,26 @@ export function BusinessPerformanceView({ token }: { token: string }) {
                         v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : `${v}`
                       }
                     />
-                    <Tooltip content={<ChartTooltip />} />
+                    <Tooltip
+                      content={<ChartTooltip />}
+                      cursor={{ fill: "hsl(var(--muted))", opacity: 0.4 }}
+                    />
                     <Legend
                       wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
-                      iconType="circle"
+                      iconType="square"
                     />
                     {METRIC_META.map((m) => (
-                      <Line
+                      <Bar
                         key={m.key}
-                        type="monotone"
                         dataKey={m.key}
                         name={m.label}
-                        stroke={m.color}
-                        strokeWidth={2}
-                        strokeDasharray={m.key === "eoiRefunds" ? "5 4" : undefined}
-                        dot={{ r: 2 }}
-                        activeDot={{ r: 4 }}
+                        fill={m.color}
+                        fillOpacity={m.key === "eoiRefunds" ? 0.55 : 1}
+                        radius={[2, 2, 0, 0]}
+                        maxBarSize={18}
                       />
                     ))}
-                  </LineChart>
+                  </BarChart>
                 </ResponsiveContainer>
               </div>
             </Card>
