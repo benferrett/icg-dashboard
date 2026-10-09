@@ -78,6 +78,10 @@ export interface ConsultantScorecard {
   ok: true;
   sourceNote: string;
   rows: ScorecardRow[];
+  // Raw first-touch minutes (lead created -> first outbound call) for each
+  // roster consultant's leads in the period. Used by Consultant Team
+  // Performance to compute a true team median rather than a median of medians.
+  firstTouchByConsultant: Record<string, number[]>;
 }
 
 export const SCORECARD_ROSTER: readonly string[] = [
@@ -638,6 +642,7 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
     });
   }
 
+  const firstTouchByConsultant: Record<string, number[]> = {};
   const rows: ScorecardRow[] = ROSTER.map((person) => {
     const ownedActivities = Array.from(activities.values()).filter(
       (activity) => activity.owner === person.name,
@@ -742,6 +747,7 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
     const firstTouchMins = ownedActivities
       .map((activity) => makeLead(activity, [], []).firstTouchMins)
       .filter((value): value is number => value != null);
+    firstTouchByConsultant[person.name] = firstTouchMins;
     const dials = periodCallEvents.length;
     const connectedEvents = periodCallEvents.filter((call) => call.connected);
     const connected = connectedEvents.length;
@@ -836,5 +842,10 @@ export async function consultantScorecard(range: PeriodRange): Promise<Consultan
     sourceNote:
       "Activity totals use HubSpot calls/SMS timestamped in the selected period; lead buckets remain based on contacts created in that period.",
     rows,
+    firstTouchByConsultant: Object.fromEntries(
+      Object.entries(firstTouchByConsultant).filter(([name]) =>
+        SCORECARD_ROSTER.includes(name),
+      ),
+    ),
   };
 }

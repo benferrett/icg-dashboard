@@ -16,7 +16,7 @@
 //              the current month window) so today's numbers stay fresh through
 //              the day without a full sweep.
 
-import { buildDashboard, businessPerformance } from "./metrics";
+import { buildDashboard, businessPerformance, consultantTeamPerformance } from "./metrics";
 import { metaAds } from "./meta";
 import { hubspot } from "./hubspot";
 import { resolvePeriod, parseCustomRange } from "./period";
@@ -97,6 +97,7 @@ export async function runSync(mode: "full" | "incremental"): Promise<void> {
       // Business performance (both granularities).
       await warmTarget("bizperf week", () => businessPerformance("week"));
       await warmTarget("bizperf month", () => businessPerformance("month"));
+      await warmTarget("teamperf week", () => consultantTeamPerformance());
       // Rolling recent month windows so custom month/quarter picks are fast.
       for (const r of recentMonthRanges(6)) {
         const range = parseCustomRange(r.start, r.end);
