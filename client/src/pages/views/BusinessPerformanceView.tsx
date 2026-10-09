@@ -22,8 +22,9 @@ import { TrendingUp, BarChart3, Table2 } from "lucide-react";
 import { useState } from "react";
 import {
   ResponsiveContainer,
-  BarChart,
+  ComposedChart,
   Bar,
+  Line,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -44,6 +45,13 @@ const METRIC_META: { key: keyof BizPerfRow; label: string; color: string }[] = [
   { key: "eoiRefunds", label: "EOI refunds", color: "hsl(25 85% 45%)" },
   { key: "uc", label: "UC", color: "hsl(190 90% 42%)" },
 ];
+
+// Trend chart split: Leads is drawn as a line on its own right-hand axis;
+// every other metric is a bar on the left-hand axis.
+const LEADS_META = METRIC_META.find((m) => m.key === "leads")!;
+const BAR_METRICS = METRIC_META.filter((m) => m.key !== "leads");
+const fmtAxis = (v: number) =>
+  v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : `${v}`;
 
 // Business Performance: a week-by-week OR month-by-month trend across the six
 // headline metrics over the trailing 12 units. This view owns its OWN data
@@ -141,11 +149,11 @@ export function BusinessPerformanceView({ token }: { token: string }) {
             <Card className="p-4">
               <div className="h-[360px] w-full">
                 <ResponsiveContainer width="100%" height="100%">
-                  <BarChart
+                  <ComposedChart
                     data={rows}
                     barCategoryGap="18%"
                     barGap={1}
-                    margin={{ top: 8, right: 12, left: -8, bottom: 4 }}
+                    margin={{ top: 8, right: 4, left: -8, bottom: 4 }}
                   >
                     <CartesianGrid
                       strokeDasharray="3 3"
@@ -158,14 +166,33 @@ export function BusinessPerformanceView({ token }: { token: string }) {
                       className="text-muted-foreground"
                       interval="preserveStartEnd"
                     />
+                    {/* Left axis: everything except Leads (bars). */}
                     <YAxis
+                      yAxisId="left"
                       tick={{ fontSize: 11 }}
                       className="text-muted-foreground"
                       allowDecimals={false}
                       width={44}
-                      tickFormatter={(v: number) =>
-                        v >= 1000 ? `${(v / 1000).toFixed(v % 1000 === 0 ? 0 : 1)}k` : `${v}`
-                      }
+                      tickFormatter={fmtAxis}
+                    />
+                    {/* Right axis: Leads only (line). Leads run an order of
+                        magnitude higher than the rest, so they get their own
+                        scale to stop the other bars collapsing to slivers. */}
+                    <YAxis
+                      yAxisId="right"
+                      orientation="right"
+                      tick={{ fontSize: 11, fill: LEADS_META.color }}
+                      stroke={LEADS_META.color}
+                      allowDecimals={false}
+                      width={44}
+                      tickFormatter={fmtAxis}
+                      label={{
+                        value: "Leads",
+                        angle: 90,
+                        position: "insideRight",
+                        offset: 8,
+                        style: { fontSize: 11, fill: LEADS_META.color },
+                      }}
                     />
                     <Tooltip
                       content={<ChartTooltip />}
@@ -175,9 +202,10 @@ export function BusinessPerformanceView({ token }: { token: string }) {
                       wrapperStyle={{ fontSize: 12, paddingTop: 8 }}
                       iconType="square"
                     />
-                    {METRIC_META.map((m) => (
+                    {BAR_METRICS.map((m) => (
                       <Bar
                         key={m.key}
+                        yAxisId="left"
                         dataKey={m.key}
                         name={m.label}
                         fill={m.color}
@@ -186,7 +214,18 @@ export function BusinessPerformanceView({ token }: { token: string }) {
                         maxBarSize={18}
                       />
                     ))}
-                  </BarChart>
+                    <Line
+                      yAxisId="right"
+                      type="linear"
+                      dataKey={LEADS_META.key}
+                      name={`${LEADS_META.label} (right axis)`}
+                      stroke={LEADS_META.color}
+                      strokeWidth={2.5}
+                      dot={{ r: 3, fill: LEADS_META.color }}
+                      activeDot={{ r: 5 }}
+                      legendType="line"
+                    />
+                  </ComposedChart>
                 </ResponsiveContainer>
               </div>
             </Card>
