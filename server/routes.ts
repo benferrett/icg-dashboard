@@ -2,7 +2,7 @@ import type { Express, Request, Response, NextFunction } from "express";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import crypto from "node:crypto";
-import { buildDashboard, businessPerformance, monthlyReport2026, forecast } from "./icg/metrics";
+import { buildDashboard, businessPerformance, consultantTeamPerformance, monthlyReport2026, forecast } from "./icg/metrics";
 import { parsePeriod, parseCustomRange } from "./icg/period";
 import { metaAds } from "./icg/meta";
 import { marketingBeta, parseLeadMonth } from "./icg/marketing-beta";
@@ -228,6 +228,12 @@ async function warmCache() {
         console.error(`[warm] bizperf:${g} failed:`, (e as any)?.message);
       }
     }
+    // Keep the Consultant Team Performance weekly trend warm.
+    try {
+      await warmKey("teamperf:week", () => consultantTeamPerformance());
+    } catch (e) {
+      console.error("[warm] teamperf:week failed:", (e as any)?.message);
+    }
   } finally {
     warming = false;
   }
@@ -371,6 +377,21 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to build business performance" });
+    }
+  });
+
+  // Consultant Team Performance (booking team, week by week, last 12 weeks)
+  app.get("/api/consultant-team-performance", requireAuth, async (req, res) => {
+    try {
+      const force = req.query.refresh === "1";
+      const data = await cached(
+        "teamperf:week",
+        () => consultantTeamPerformance(),
+        force,
+      );
+      res.json(data);
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to build consultant team performance" });
     }
   });
 

@@ -42,6 +42,7 @@ import { ConsultantsView } from "./views/ConsultantsView";
 import { StrategistsView } from "./views/StrategistsView";
 import { ContractsView } from "./views/ContractsView";
 import { BusinessPerformanceView } from "./views/BusinessPerformanceView";
+import { ConsultantTeamPerformanceView } from "./views/ConsultantTeamPerformanceView";
 import { FunnelPerformanceView } from "./views/FunnelPerformanceView";
 import { Report2026View } from "./views/Report2026View";
 import { ForecastingView } from "./views/ForecastingView";
@@ -55,6 +56,7 @@ type TabKey =
   | "marketing_new"
   | "funnel"
   | "consultants"
+  | "consultant_team"
   | "strategists"
   | "contracts"
   | "business"
@@ -68,6 +70,7 @@ type TabKey =
 // Accounts Receivable is always "as of now" (open invoices), no date picker.
 const SELF_WINDOWED_TABS: TabKey[] = [
   "business",
+  "consultant_team",
   "report2026",
   "forecasting",
   "marketing_beta",
@@ -95,6 +98,11 @@ const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
     icon: <GitCompareArrows className="h-4 w-4" />,
   },
   { key: "consultants", label: "Consultants", icon: <Users className="h-4 w-4" /> },
+  {
+    key: "consultant_team",
+    label: "Consultant Team Performance",
+    icon: <Users className="h-4 w-4" />,
+  },
   { key: "strategists", label: "Strategists", icon: <Target className="h-4 w-4" /> },
   { key: "contracts", label: "Contracts", icon: <FileSignature className="h-4 w-4" /> },
   { key: "business", label: "Business Performance", icon: <TrendingUp className="h-4 w-4" /> },
@@ -395,6 +403,7 @@ export default function DashboardPage({
           {tab === "marketing_beta" && <MarketingBetaView token={token} />}
           {tab === "marketing_new" && <MarketingNewView token={token} />}
           {tab === "business" && <BusinessPerformanceView token={token} />}
+          {tab === "consultant_team" && <ConsultantTeamPerformanceView token={token} />}
           {tab === "report2026" && <Report2026View token={token} />}
           {tab === "forecasting" && <ForecastingView token={token} />}
           {tab === "accounts_receivable" && <AccountsReceivableView token={token} />}
