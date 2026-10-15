@@ -24,6 +24,7 @@ import { apiFetch } from "./proxy";
 import { classifyAttendance, loadAttendanceContext } from "./attendance";
 import type { AttendanceStatus } from "../../shared/attendance";
 import type { PeriodRange } from "./period";
+import { grossMembershipEligible, membershipSaleMs } from "./consultant-memberships";
 import {
   DS_TITLE_PREFIX,
   bookingSourceOf,
@@ -31,6 +32,9 @@ import {
   isStrategistOwner,
   leadSourceLabel,
   ownerName,
+  MEMBERSHIP_REFUND_STAGE,
+  MEMBERSHIP_SOLD_STAGES,
+  MEMBERSHIP_SOLD_TIERS,
 } from "./reference";
 
 type Props = Record<string, string | undefined>;
@@ -57,6 +61,12 @@ export interface BookingRow {
   leadCreatedAt: string | null;
   dials: number; // outbound calls to the lead before the booking was made
   connectedDials: number; // of those, calls logged with the Connected outcome
+  // Membership outcome for this client (same gross-sale rule as Consultants):
+  // "signed_up" = paid Bronze/Silver/Gold; "refunded" = sold then cancelled.
+  membership: "signed_up" | "refunded" | null;
+  membershipTier: string | null;
+  membershipDate: string | null; // sale / paid date (ISO)
+  membershipDealUrl?: string;
   counted: boolean; // included in the dashboard's DS booked total
   excludedReason?: "rebook" | "source";
   hubspotUrl?: string;
@@ -75,6 +85,7 @@ export interface BookingsPayload {
     upcoming: number;
     awaiting: number;
     avgDials: number | null;
+    signedUp: number;
   };
   adLookup: "ok" | "unavailable";
 }
@@ -141,7 +152,62 @@ export interface BuildInput {
   contactCalls: Assoc;
   callProps: Record<string, Props>;
   ads: Record<string, { name: string; campaign: string | null }>;
+  contactDeals?: Assoc;
+  membershipProps?: Record<string, Props>;
   now?: number;
+}
+
+const SOLD_ENTERED_PROPS = MEMBERSHIP_SOLD_STAGES.map((id) => `hs_v2_date_entered_${id}`);
+export const MEMBERSHIP_DEAL_PROPS = [
+  "dealname",
+  "pipeline",
+  "dealstage",
+  "booking_consultant",
+  "membership_paid_date",
+  "closedate",
+  "hs_v2_date_entered_2872614380",
+  `hs_v2_date_entered_${MEMBERSHIP_REFUND_STAGE}`,
+  ...SOLD_ENTERED_PROPS,
+];
+
+// Membership outcome across all of the client's deals. A paid membership wins
+// over a refunded one; the earliest qualifying sale is shown.
+export function membershipOutcome(
+  dealIds: string[],
+  props: Record<string, Props>,
+): Pick<BookingRow, "membership" | "membershipTier" | "membershipDate" | "membershipDealUrl"> {
+  let best: { kind: "signed_up" | "refunded"; ms: number; tier: string | null; id: string } | null = null;
+  for (const id of dealIds) {
+    const p = props[id];
+    if (!p || !grossMembershipEligible(p)) continue;
+    const refunded = p.dealstage === MEMBERSHIP_REFUND_STAGE;
+    const kind = refunded ? "refunded" : "signed_up";
+    const ms = membershipSaleMs(p);
+    let tier = MEMBERSHIP_SOLD_TIERS[p.dealstage || ""] || null;
+    if (!tier) {
+      // Refunded/paid-date-only deals: take the last sold tier it entered.
+      let latest = -Infinity;
+      for (const sid of MEMBERSHIP_SOLD_STAGES) {
+        const t = Date.parse(p[`hs_v2_date_entered_${sid}`] || "");
+        if (Number.isFinite(t) && t > latest) {
+          latest = t;
+          tier = MEMBERSHIP_SOLD_TIERS[sid];
+        }
+      }
+    }
+    const better =
+      !best ||
+      (kind === "signed_up" && best.kind === "refunded") ||
+      (kind === best.kind && (Number.isFinite(ms) ? ms : Infinity) < (Number.isFinite(best.ms) ? best.ms : Infinity));
+    if (better) best = { kind, ms, tier, id };
+  }
+  if (!best) return { membership: null, membershipTier: null, membershipDate: null };
+  return {
+    membership: best.kind,
+    membershipTier: best.tier,
+    membershipDate: Number.isFinite(best.ms) ? new Date(best.ms).toISOString() : null,
+    membershipDealUrl: `https://app.hubspot.com/contacts/${PORTAL}/record/0-3/${best.id}`,
+  };
 }
 
 // Pure assembly step (unit-tested). `meetings` must already be limited to DS
@@ -236,6 +302,11 @@ export function buildBookingRows(input: BuildInput): BookingRow[] {
       adName = fallbackAdLabel(cp);
     }
 
+    const memberDeals = Array.from(
+      new Set([...dealIds, ...cids.flatMap((c) => input.contactDeals?.[c] || [])]),
+    );
+    const member = membershipOutcome(memberDeals, input.membershipProps || {});
+
     const oid = m.properties.hubspot_owner_id;
     rows.push({
       meetingId: m.id,
@@ -256,6 +327,7 @@ export function buildBookingRows(input: BuildInput): BookingRow[] {
       leadCreatedAt: cp?.createdate || null,
       dials,
       connectedDials,
+      ...member,
       counted,
       excludedReason,
       hubspotUrl: cid
@@ -279,6 +351,7 @@ export function summarise(rows: BookingRow[]): BookingsPayload["totals"] {
     notSat: c.filter((r) => ["no_show_or_reschedule", "cancelled", "rescheduled"].includes(r.status)).length,
     upcoming: c.filter((r) => r.status === "upcoming").length,
     awaiting: c.filter((r) => r.status === "awaiting_confirmation").length,
+    signedUp: c.filter((r) => r.membership === "signed_up").length,
     avgDials: dials.length ? Math.round((dials.reduce((s, d) => s + d, 0) / dials.length) * 10) / 10 : null,
   };
 }
@@ -360,6 +433,8 @@ export async function bookingsList(range: PeriodRange): Promise<BookingsPayload>
   let contactCalls: Assoc = {};
   let callProps: Record<string, Props> = {};
   let ads: Record<string, { name: string; campaign: string | null }> = {};
+  let contactDeals: Assoc = {};
+  let membershipProps: Record<string, Props> = {};
   let adLookup: BookingsPayload["adLookup"] = "ok";
 
   if (ids.length) {
@@ -374,11 +449,18 @@ export async function bookingsList(range: PeriodRange): Promise<BookingsPayload>
 
     const contactIds = Array.from(new Set(Object.values(contactAssoc).flat()));
     if (contactIds.length) {
-      [contactProps, contactHistory, contactCalls] = await Promise.all([
+      [contactProps, contactHistory, contactCalls, contactDeals] = await Promise.all([
         hubspot.batchRead("contacts", contactIds, CONTACT_PROPS),
         hubspot.batchReadWithHistory("contacts", contactIds, ["hubspot_owner_id"]),
         hubspot.batchAssociations("contacts", "calls", contactIds),
+        hubspot.batchAssociations("contacts", "deals", contactIds),
       ]);
+      const memberDealIds = Array.from(
+        new Set([...Object.values(contactDeals).flat(), ...Object.values(dealAssoc).flat()]),
+      );
+      membershipProps = memberDealIds.length
+        ? await hubspot.batchRead("deals", memberDealIds, MEMBERSHIP_DEAL_PROPS)
+        : {};
       const callIds = Array.from(new Set(Object.values(contactCalls).flat()));
       const adIds = Array.from(
         new Set(contactIds.map((c) => adIdOf(contactProps[c])).filter(Boolean) as string[]),
@@ -411,6 +493,8 @@ export async function bookingsList(range: PeriodRange): Promise<BookingsPayload>
     contactCalls,
     callProps,
     ads,
+    contactDeals,
+    membershipProps,
   });
 
   return {

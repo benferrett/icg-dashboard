@@ -108,3 +108,23 @@ test("missing CRM update is awaiting confirmation, not no-show", () => {
   const r1 = buildBookingRows(b).find((r) => r.meetingId === "m1")!;
   assert.equal(r1.status, "awaiting_confirmation");
 });
+
+test("signed up: paid tier shown; refund flagged; referral ignored", () => {
+  const b: any = base();
+  b.contactDeals = { c1: ["d1", "x1"], c2: ["d2", "x2"], c5: ["x5"] };
+  b.membershipProps = {
+    d1: { dealname: "Ann Lee - Membership", pipeline: "1448193481", dealstage: "2399433181", membership_paid_date: "2026-10-14" },
+    x2: { dealname: "Bob - Membership", pipeline: "1448193481", dealstage: "3152097752", hs_v2_date_entered_2547683827: "2026-10-01T00:00:00Z" },
+    x5: { dealname: "Dan - Referral", pipeline: "1448193481", dealstage: "2872614380" },
+  };
+  const rows = buildBookingRows(b);
+  const r1 = rows.find((r) => r.meetingId === "m1")!;
+  assert.equal(r1.membership, "signed_up");
+  assert.equal(r1.membershipTier, "Silver");
+  assert.ok(r1.membershipDate?.startsWith("2026-10-13T14"));
+  const r2 = rows.find((r) => r.meetingId === "m2")!;
+  assert.equal(r2.membership, "refunded");
+  assert.equal(r2.membershipTier, "Gold");
+  assert.equal(rows.find((r) => r.meetingId === "m5")!.membership, null);
+  assert.equal(summarise(rows).signedUp, 1);
+});
