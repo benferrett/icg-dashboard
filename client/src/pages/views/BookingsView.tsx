@@ -15,7 +15,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { CheckCircle2, XCircle, CalendarClock, HelpCircle, ExternalLink } from "lucide-react";
+import { CheckCircle2, XCircle, CalendarClock, HelpCircle, ExternalLink, BadgeCheck, Undo2 } from "lucide-react";
 
 export interface BookingRow {
   meetingId: string;
@@ -36,6 +36,10 @@ export interface BookingRow {
   leadCreatedAt: string | null;
   dials: number;
   connectedDials: number;
+  membership?: "signed_up" | "refunded" | null;
+  membershipTier?: string | null;
+  membershipDate?: string | null;
+  membershipDealUrl?: string;
   counted: boolean;
   excludedReason?: "rebook" | "source";
   hubspotUrl?: string;
@@ -51,6 +55,7 @@ interface BookingsPayload {
     upcoming: number;
     awaiting: number;
     avgDials: number | null;
+    signedUp?: number;
   };
   adLookup: "ok" | "unavailable";
   updating?: boolean;
@@ -121,7 +126,37 @@ function SatMark({ row }: { row: BookingRow }) {
   );
 }
 
-type StatusFilter = "all" | "sat" | "not_sat" | "upcoming" | "awaiting";
+type StatusFilter = "all" | "sat" | "not_sat" | "upcoming" | "awaiting" | "signed_up" | "sat_not_signed";
+
+function SignedUpCell({ row }: { row: BookingRow }) {
+  if (row.membership === "signed_up" || row.membership === "refunded") {
+    const refunded = row.membership === "refunded";
+    const body = (
+      <span className="inline-flex items-start gap-1.5 whitespace-nowrap">
+        {refunded ? (
+          <Undo2 className="h-5 w-5 shrink-0 text-amber-600" aria-label="Refunded" />
+        ) : (
+          <BadgeCheck className="h-5 w-5 shrink-0 text-emerald-500" aria-label="Signed up" />
+        )}
+        <span className="flex flex-col leading-tight">
+          <span className="text-sm">{refunded ? "Refunded" : row.membershipTier || "Member"}</span>
+          <span className="text-xs text-muted-foreground tabular-nums">
+            {refunded && row.membershipTier ? `${row.membershipTier} · ` : ""}
+            {row.membershipDate ? fmtDay(row.membershipDate) : ""}
+          </span>
+        </span>
+      </span>
+    );
+    return row.membershipDealUrl ? (
+      <a href={row.membershipDealUrl} target="_blank" rel="noreferrer" className="hover:underline" data-testid={`member-${row.meetingId}`}>
+        {body}
+      </a>
+    ) : (
+      body
+    );
+  }
+  return <span className="text-muted-foreground" data-testid={`member-${row.meetingId}`}>—</span>;
+}
 
 export function BookingsView({
   token,
@@ -158,6 +193,8 @@ export function BookingsView({
       if (status === "not_sat" && !["no_show_or_reschedule", "cancelled", "rescheduled"].includes(r.status)) return false;
       if (status === "upcoming" && r.status !== "upcoming") return false;
       if (status === "awaiting" && r.status !== "awaiting_confirmation") return false;
+      if (status === "signed_up" && r.membership !== "signed_up") return false;
+      if (status === "sat_not_signed" && !(r.status === "sat" && r.membership !== "signed_up")) return false;
       if (term) {
         const hay = `${r.client} ${r.adName || ""} ${r.campaignName || ""} ${r.booker} ${r.strategist || ""}`.toLowerCase();
         if (!hay.includes(term)) return false;
@@ -174,8 +211,8 @@ export function BookingsView({
   if (q.isLoading) {
     return (
       <div className="flex flex-col gap-4">
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-          {Array.from({ length: 5 }).map((_, i) => (
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
+          {Array.from({ length: 6 }).map((_, i) => (
             <Skeleton key={i} className="h-24" />
           ))}
         </div>
@@ -194,7 +231,7 @@ export function BookingsView({
   const t = q.data!.totals;
   return (
     <div className="flex flex-col gap-5">
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+      <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-3">
         <Stat label="DS booked" value={fmtNumber(t.counted)} sub="unique, EMBR + Meta" accent testId="stat-bookings-booked" />
         <Stat label="Sat" value={fmtNumber(t.sat)} sub="of those booked" testId="stat-bookings-sat" />
         <Stat label="Not attended" value={fmtNumber(t.notSat)} sub="no-show / cancelled" testId="stat-bookings-notsat" />
@@ -203,6 +240,12 @@ export function BookingsView({
           value={fmtNumber(t.upcoming + t.awaiting)}
           sub={`${t.upcoming} upcoming · ${t.awaiting} awaiting`}
           testId="stat-bookings-pending"
+        />
+        <Stat
+          label="Signed up"
+          value={fmtNumber(t.signedUp ?? 0)}
+          sub={t.sat ? `${Math.round(((t.signedUp ?? 0) / t.sat) * 100)}% of sat` : "paid memberships"}
+          testId="stat-bookings-signed"
         />
         <Stat
           label="Avg dials to book"
@@ -243,6 +286,8 @@ export function BookingsView({
             <SelectItem value="not_sat">Not attended</SelectItem>
             <SelectItem value="upcoming">Upcoming</SelectItem>
             <SelectItem value="awaiting">Awaiting confirmation</SelectItem>
+            <SelectItem value="signed_up">Signed up</SelectItem>
+            <SelectItem value="sat_not_signed">Sat, not signed up</SelectItem>
           </SelectContent>
         </Select>
         <label className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -266,19 +311,20 @@ export function BookingsView({
           <table className="w-full text-sm">
             <thead className="bg-muted/50 text-xs uppercase tracking-wide text-muted-foreground">
               <tr>
-                <th className="text-left font-medium px-3 py-2">Client</th>
-                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Booked for</th>
-                <th className="text-left font-medium px-3 py-2">Sat</th>
-                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Booked by</th>
-                <th className="text-left font-medium px-3 py-2">Ad / source</th>
-                <th className="text-left font-medium px-3 py-2 whitespace-nowrap">Lead created</th>
-                <th className="text-right font-medium px-3 py-2 whitespace-nowrap">Dials to book</th>
+                <th className="text-left font-medium px-2 py-2">Client</th>
+                <th className="text-left font-medium px-2 py-2 whitespace-nowrap">Booked for</th>
+                <th className="text-left font-medium px-2 py-2">Sat</th>
+                <th className="text-left font-medium px-2 py-2 whitespace-nowrap">Signed up</th>
+                <th className="text-left font-medium px-2 py-2 whitespace-nowrap">Booked by</th>
+                <th className="text-left font-medium px-2 py-2">Ad / source</th>
+                <th className="text-left font-medium px-2 py-2 whitespace-nowrap">Lead created</th>
+                <th className="text-right font-medium px-2 py-2 whitespace-nowrap">Dials to book</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={7} className="px-3 py-10 text-center text-muted-foreground">
+                  <td colSpan={8} className="px-3 py-10 text-center text-muted-foreground">
                     No bookings match this period and filter.
                   </td>
                 </tr>
@@ -289,7 +335,7 @@ export function BookingsView({
                   className={`border-t align-top ${r.counted ? "" : "opacity-60"}`}
                   data-testid={`row-booking-${r.meetingId}`}
                 >
-                  <td className="px-3 py-2 min-w-[170px]">
+                  <td className="px-2 py-2 pl-3 min-w-[160px]">
                     <div className="flex items-center gap-1 font-medium whitespace-nowrap">
                       {r.hubspotUrl ? (
                         <a href={r.hubspotUrl} target="_blank" rel="noreferrer" className="hover:underline inline-flex items-center gap-1">
@@ -309,11 +355,14 @@ export function BookingsView({
                       )}
                     </div>
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap tabular-nums">{fmtDateTime(r.sessionAt)}</td>
-                  <td className="px-3 py-2">
+                  <td className="px-2 py-2 whitespace-nowrap tabular-nums">{fmtDateTime(r.sessionAt)}</td>
+                  <td className="px-2 py-2">
                     <SatMark row={r} />
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap">
+                  <td className="px-2 py-2">
+                    <SignedUpCell row={r} />
+                  </td>
+                  <td className="px-2 py-2 whitespace-nowrap">
                     {r.booker === "Unattributed" ? (
                       <span className="text-muted-foreground">Unattributed</span>
                     ) : (
@@ -321,7 +370,7 @@ export function BookingsView({
                     )}
                     <div className="text-xs text-muted-foreground tabular-nums">on {fmtShortDateTime(r.bookedAt)}</div>
                   </td>
-                  <td className="px-3 py-2 min-w-[180px] max-w-[260px]">
+                  <td className="px-2 py-2 min-w-[160px] max-w-[190px]">
                     <div className="truncate" title={r.adName || undefined}>
                       {r.adName || <span className="text-muted-foreground">{r.source}</span>}
                     </div>
@@ -329,8 +378,8 @@ export function BookingsView({
                       {r.adName ? (r.campaignName ? `${r.source} · ${r.campaignName}` : r.source) : ""}
                     </div>
                   </td>
-                  <td className="px-3 py-2 whitespace-nowrap tabular-nums">{fmtDay(r.leadCreatedAt)}</td>
-                  <td className="px-3 py-2 text-right tabular-nums">
+                  <td className="px-2 py-2 whitespace-nowrap tabular-nums">{fmtDay(r.leadCreatedAt)}</td>
+                  <td className="px-2 py-2 text-right tabular-nums">
                     <span className="font-medium">{r.dials}</span>
                     {r.dials > 0 && (
                       <div className="text-xs text-muted-foreground">{r.connectedDials} connected</div>
@@ -346,6 +395,7 @@ export function BookingsView({
       <p className="text-xs text-muted-foreground">
         Bookings are Discovery Sessions created in the selected period. “DS booked” matches the Overview figure: EMBR and Meta leads only, a rebook for the same
         client counts once. Sat uses the deal stage or reviewed strategist notes; a session with no CRM update shows as awaiting confirmation, not a no-show.
+        Signed up = a paid Bronze/Silver/Gold membership for that client (same rule as Consultants; referrals and tests excluded, refunds flagged).
         Dials to book = outbound calls to the lead logged before the booking was made. Ad = the lead’s first-touch Meta ad.
       </p>
     </div>
