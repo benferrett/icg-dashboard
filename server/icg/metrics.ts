@@ -11,7 +11,7 @@ import {
   buildMonthBucketsFromAnchor,
   Granularity,
 } from "./period";
-import { consultantScorecard } from "./consultant-scorecard";
+import { consultantScorecard, SCORECARD_ROSTER } from "./consultant-scorecard";
 import { consultantMembershipSummary } from "./consultant-memberships";
 import {
   ownerName,
@@ -3043,5 +3043,142 @@ export async function forecast() {
     ds: { restOfMonth: ds.rest, fullMonth: ds.full },
     am: { restOfMonth: am.rest, fullMonth: am.full },
     upcoming,
+  };
+}
+
+// ===========================================================================
+// CONSULTANT TEAM PERFORMANCE — week-by-week trend for the booking team
+// ===========================================================================
+// Same idea as Business Performance, but scoped to the booking-consultant team
+// (SCORECARD_ROSTER). Each week reuses the EXACT per-period sources the
+// Consultants tab uses, so a week here reconciles with picking that week on
+// the Consultants tab:
+//   • Leads      = new contacts owned by the consultant (contactFunnel).
+//   • Bookings   = attributed DS bookings (discoverySessions.bookedByConsultant).
+//   • Dials      = outbound calls timestamped in the week (scorecard).
+//   • 3m+ calls  = connected outbound calls lasting >= 3 minutes (scorecard).
+//   • Speed to lead = median minutes from lead creation to first outbound call,
+//                    across all the team's leads created in the week, plus the
+//                    share first called within 5 minutes.
+export interface TeamPerfMetrics {
+  leads: number;
+  dials: number;
+  connected: number;
+  over3mCalls: number;
+  bookings: number;
+  speedToLeadMins: number | null;
+  within5Pct: number | null;
+  leadsTimed: number;
+}
+
+function medianOf(values: number[]): number | null {
+  if (!values.length) return null;
+  const o = [...values].sort((a, b) => a - b);
+  const m = Math.floor(o.length / 2);
+  return o.length % 2 ? o[m] : (o[m - 1] + o[m]) / 2;
+}
+
+function speedStats(samples: number[]) {
+  const med = medianOf(samples);
+  return {
+    speedToLeadMins: med == null ? null : Math.round(med * 10) / 10,
+    within5Pct: samples.length
+      ? Math.round((samples.filter((v) => v <= 5).length / samples.length) * 100)
+      : null,
+    leadsTimed: samples.length,
+  };
+}
+
+export async function consultantTeamPerformance(weeks = 12) {
+  const buckets = buildBuckets("week", weeks);
+  const roster = [...SCORECARD_ROSTER];
+
+  const perBucket = async (b: { label: string; start: string; end: string }) => {
+    const range: PeriodRange = { key: "custom", label: b.label, start: b.start, end: b.end };
+    const [contact, ds, scorecard] = await Promise.all([
+      contactFunnel(range.start, range.end),
+      discoverySessions(range.start, range.end),
+      consultantScorecard(range),
+    ]);
+    const leadsBy: Record<string, number> = {};
+    for (const c of contact.consultants) leadsBy[c.name] = c.leads;
+    const bookedBy = ds.bookedByConsultant || {};
+    const byConsultant: Record<string, TeamPerfMetrics> = {};
+    const teamSamples: number[] = [];
+    for (const name of roster) {
+      const row = scorecard.rows.find((r) => r.name === name);
+      const samples = scorecard.firstTouchByConsultant?.[name] || [];
+      teamSamples.push(...samples);
+      byConsultant[name] = {
+        leads: leadsBy[name] || 0,
+        dials: row?.dials || 0,
+        connected: row?.connected || 0,
+        over3mCalls: row?.over3mCalls || 0,
+        bookings: bookedBy[name] || 0,
+        ...speedStats(samples),
+      };
+    }
+    const vals = Object.values(byConsultant);
+    const sumOf = (k: keyof TeamPerfMetrics) =>
+      vals.reduce((t, v) => t + ((v[k] as number) || 0), 0);
+    const team: TeamPerfMetrics = {
+      leads: sumOf("leads"),
+      dials: sumOf("dials"),
+      connected: sumOf("connected"),
+      over3mCalls: sumOf("over3mCalls"),
+      bookings: sumOf("bookings"),
+      ...speedStats(teamSamples),
+    };
+    return { bucket: b, team, byConsultant, samples: { team: teamSamples, byConsultant: Object.fromEntries(roster.map((n) => [n, scorecard.firstTouchByConsultant?.[n] || []])) } };
+  };
+
+  // Each week fans out to several HubSpot searches; run a few weeks at a time
+  // so a cold cache doesn't hammer the API rate limit.
+  const results: Awaited<ReturnType<typeof perBucket>>[] = new Array(buckets.length);
+  const CONCURRENCY = 3;
+  for (let i = 0; i < buckets.length; i += CONCURRENCY) {
+    const chunk = buckets.slice(i, i + CONCURRENCY);
+    const out = await Promise.all(chunk.map(perBucket));
+    out.forEach((r, j) => (results[i + j] = r));
+  }
+
+  const rows = results.map((r) => ({
+    label: r.bucket.label,
+    start: r.bucket.start,
+    end: r.bucket.end,
+    team: r.team,
+    byConsultant: r.byConsultant,
+  }));
+
+  // Window totals: counts are summed; speed to lead is the median across every
+  // lead in the window (not an average of weekly medians).
+  const totalFor = (pick: (r: (typeof results)[number]) => TeamPerfMetrics, samples: number[]): TeamPerfMetrics => {
+    const s = (k: keyof TeamPerfMetrics) =>
+      results.reduce((t, r) => t + ((pick(r)[k] as number) || 0), 0);
+    return {
+      leads: s("leads"),
+      dials: s("dials"),
+      connected: s("connected"),
+      over3mCalls: s("over3mCalls"),
+      bookings: s("bookings"),
+      ...speedStats(samples),
+    };
+  };
+  const totals = {
+    team: totalFor((r) => r.team, results.flatMap((r) => r.samples.team)),
+    byConsultant: Object.fromEntries(
+      roster.map((n) => [
+        n,
+        totalFor((r) => r.byConsultant[n], results.flatMap((r) => r.samples.byConsultant[n])),
+      ]),
+    ),
+  };
+
+  return {
+    generatedAt: new Date().toISOString(),
+    granularity: "week" as const,
+    consultants: roster,
+    rows,
+    totals,
   };
 }

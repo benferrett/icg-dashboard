@@ -349,6 +349,36 @@ export interface BusinessPerformance {
   totals: Record<string, number>;
 }
 
+// --- Consultant team performance (booking team, week by week) ---
+export interface TeamPerfMetrics {
+  leads: number;
+  dials: number;
+  connected: number;
+  over3mCalls: number;
+  bookings: number;
+  speedToLeadMins: number | null;
+  within5Pct: number | null;
+  leadsTimed: number;
+}
+
+export interface TeamPerfRow {
+  label: string;
+  start: string;
+  end: string;
+  team: TeamPerfMetrics;
+  byConsultant: Record<string, TeamPerfMetrics>;
+}
+
+export interface ConsultantTeamPerformance {
+  generatedAt: string;
+  cached?: boolean;
+  cacheAgeSec?: number;
+  granularity: "week";
+  consultants: string[];
+  rows: TeamPerfRow[];
+  totals: { team: TeamPerfMetrics; byConsultant: Record<string, TeamPerfMetrics> };
+}
+
 // --- 2026 month-by-month report ---
 export interface Report2026Row {
   label: string;
