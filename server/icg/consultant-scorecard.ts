@@ -98,6 +98,7 @@ const ROSTER: Array<{ name: string; role: ScorecardRole; ownerIds: string[] }> =
   { name: "Patrick Nong", role: "Booker", ownerIds: ["367581062"] },
   { name: "Ben Ferrett", role: "Strategist", ownerIds: ["361455466"] },
   { name: "Renee O'Connell", role: "Strategist", ownerIds: ["363222039"] },
+  { name: "Christina Su", role: "Strategist", ownerIds: ["368676161"] },
   { name: "Patrick Van Orsouw", role: "Strategist", ownerIds: ["362352488"] },
   { name: "Steven Mau", role: "Strategist", ownerIds: ["361919740", "361919911"] },
 ];
@@ -127,6 +128,7 @@ export const OWNER_MAP: Record<string, string> = {
   "366721097": "Mitchell Saxton",
   "367581062": "Patrick Nong",
   "363222039": "Renee O'Connell",
+  "368676161": "Christina Su",
   "361455466": "Ben Ferrett",
   "364595873": "Jean-Jerome Vacher",
   // Existing legacy owners remain supported.
@@ -151,6 +153,7 @@ const AIRCALL_LINE_MAP: Record<string, string> = {
   patty: "Patrick Nong",
   patrick: "Patrick Van Orsouw",
   renee: "Renee O'Connell",
+  christina: "Christina Su",
   "steve mau": "Steven Mau",
   "steven mau": "Steven Mau",
   jean: "Jean-Jerome Vacher",
