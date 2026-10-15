@@ -56,7 +56,7 @@ export interface BookingRow {
   adId: string | null;
   leadCreatedAt: string | null;
   dials: number; // outbound calls to the lead before the booking was made
-  connectedDials: number; // of those, calls of 30s+ or marked connected
+  connectedDials: number; // of those, calls logged with the Connected outcome
   counted: boolean; // included in the dashboard's DS booked total
   excludedReason?: "rebook" | "source";
   hubspotUrl?: string;
@@ -82,7 +82,6 @@ export interface BookingsPayload {
 const PORTAL = "442187411";
 const HSA_AD_RE = /[?&]hsa_ad=(\d+)/i;
 const CONNECTED_DISPOSITION = "f240bbac-87c9-4f6e-bf70-924b57d47db7";
-const CONNECT_MS = 30000;
 
 export function clientFromTitle(title: string): string {
   const afterColon = title.slice(DS_TITLE_PREFIX.length).replace(/^:\s*/, "");
@@ -123,7 +122,8 @@ function isOutboundCall(p: Props): boolean {
 }
 
 function isConnectedCall(p: Props): boolean {
-  return p.hs_call_disposition === CONNECTED_DISPOSITION || Number(p.hs_call_duration) >= CONNECT_MS;
+  // Same definition as the Consultant Scorecard: HubSpot "Connected" outcome.
+  return p.hs_call_disposition === CONNECTED_DISPOSITION;
 }
 
 function contactName(p?: Props): string | null {
