@@ -47,7 +47,7 @@ function base() {
     contactCalls: { c1: ["k1", "k2", "k3", "k4"], c2: ["k5"] },
     callProps: {
       k1: { hs_call_direction: "OUTBOUND", hs_timestamp: "2026-10-12T01:00:00Z", hs_call_duration: "5000" },
-      k2: { hs_call_direction: "OUTBOUND", hs_timestamp: "2026-10-13T00:30:00Z", hs_call_duration: "400000" },
+      k2: { hs_call_direction: "OUTBOUND", hs_timestamp: "2026-10-13T00:30:00Z", hs_call_duration: "400000", hs_call_disposition: "f240bbac-87c9-4f6e-bf70-924b57d47db7" },
       k3: { hs_call_direction: "INBOUND", hs_timestamp: "2026-10-12T02:00:00Z" },
       k4: { hs_call_direction: "OUTBOUND", hs_timestamp: "2026-10-13T05:00:00Z" }, // after booking
       k5: { hs_call_direction: "OUTBOUND", hs_timestamp: "2026-10-12T00:00:00Z" },
