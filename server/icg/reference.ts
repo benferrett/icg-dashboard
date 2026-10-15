@@ -26,6 +26,7 @@ export const OWNERS: Record<string, string> = {
   "364595873": "Raul Garcia",
   "366721097": "Mitchell Saxton",
   "367581062": "Patrick Nong",
+  "368676161": "Christina Su",
 };
 
 export function ownerName(id?: string | null): string {
@@ -309,6 +310,7 @@ export const STRATEGIST_OWNERS: Record<string, string> = {
   "362352488": "Patrick Van Orsouw",
   "363222039": "Renee O'Connell",
   "363184380": "Rob Gallacher",
+  "368676161": "Christina Su",
   "361919911": "Steven Mau",
   "361919740": "Steven Mau",
   "82710130": "Ben Ferrett",
@@ -331,6 +333,7 @@ export const STRATEGIST_NAME_TOKENS: Record<string, string> = {
   oconnell: "363222039",
   rob: "363184380",
   gallacher: "363184380",
+  christina: "368676161",
   "steven mau": "361919911",
 };
 
