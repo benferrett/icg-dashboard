@@ -27,6 +27,7 @@ import {
   GitCompareArrows,
   CalendarRange,
   CalendarClock,
+  CalendarCheck,
   Receipt,
   AlertTriangle,
   Moon,
@@ -47,9 +48,11 @@ import { Report2026View } from "./views/Report2026View";
 import { ForecastingView } from "./views/ForecastingView";
 import { AccountsReceivableView } from "./views/AccountsReceivableView";
 import { MembershipPaymentsView } from "./views/MembershipPaymentsView";
+import { BookingsView } from "./views/BookingsView";
 
 type TabKey =
   | "overview"
+  | "bookings"
   | "marketing"
   | "marketing_beta"
   | "marketing_new"
@@ -78,6 +81,7 @@ const SELF_WINDOWED_TABS: TabKey[] = [
 
 const TABS: { key: TabKey; label: string; icon: React.ReactNode }[] = [
   { key: "overview", label: "Overview", icon: <LayoutDashboard className="h-4 w-4" /> },
+  { key: "bookings", label: "Bookings", icon: <CalendarCheck className="h-4 w-4" /> },
   { key: "marketing", label: "Marketing", icon: <Megaphone className="h-4 w-4" /> },
   {
     key: "marketing_beta",
@@ -153,7 +157,7 @@ export default function DashboardPage({
   const rangeKey = custom ? `custom:${custom.start}:${custom.end}` : period;
 
   const dash = useQuery<Dashboard>({
-    enabled: tab !== "membership_payments" && tab !== "accounts_receivable",
+    enabled: tab !== "membership_payments" && tab !== "accounts_receivable" && tab !== "bookings",
     queryKey: ["/api/dashboard", rangeKey],
     queryFn: () => apiGet<Dashboard>(`/api/dashboard?${rangeQS}`, token),
     // While the backend is refreshing a stale snapshot in the background, poll
@@ -162,7 +166,7 @@ export default function DashboardPage({
       (q.state.data as Dashboard | undefined)?.updating ? 4000 : false,
   });
   const meta = useQuery<MetaData>({
-    enabled: tab !== "membership_payments" && tab !== "accounts_receivable",
+    enabled: tab !== "membership_payments" && tab !== "accounts_receivable" && tab !== "bookings",
     queryKey: ["/api/meta", rangeKey],
     queryFn: () => apiGet<MetaData>(`/api/meta?${rangeQS}`, token),
   });
@@ -186,6 +190,17 @@ export default function DashboardPage({
       } catch {
         await queryClient.invalidateQueries({queryKey:["ar-invoices"]});
       } finally { setRefreshing(false); }
+      return;
+    }
+    if (tab === "bookings") {
+      try {
+        const fresh = await apiGet(`/api/bookings?${rangeQS}&refresh=1`, token);
+        queryClient.setQueryData(["/api/bookings", rangeKey], fresh);
+      } catch {
+        await queryClient.invalidateQueries({ queryKey: ["/api/bookings", rangeKey] });
+      } finally {
+        setRefreshing(false);
+      }
       return;
     }
     if (tab === "membership_payments") {
@@ -274,6 +289,8 @@ export default function DashboardPage({
           )}
           {tab === "membership_payments" ? (
             <span className="hidden md:inline text-xs text-muted-foreground">Membership worklists</span>
+          ) : tab === "bookings" ? (
+            <span className="hidden md:inline text-xs text-muted-foreground">Discovery Session bookings</span>
           ) : tab === "accounts_receivable" ? (
             <span className="hidden md:inline text-xs text-muted-foreground">Commission receivables</span>
           ) : d?.updating ? (
@@ -344,7 +361,7 @@ export default function DashboardPage({
             )}
           </div>
 
-          {tab !== "membership_payments" && dash.error && (dash.error as Error).message !== "UNAUTHORIZED" && (
+          {tab !== "membership_payments" && tab !== "bookings" && dash.error && (dash.error as Error).message !== "UNAUTHORIZED" && (
             <Card className="mb-6 p-4 border-destructive/40 flex items-center gap-3">
               <AlertTriangle className="h-5 w-5 text-destructive shrink-0" />
               <div className="text-sm">
@@ -366,6 +383,9 @@ export default function DashboardPage({
 
           {tab === "overview" && (
             <OverviewView d={d} meta={meta.data} loading={loading} periodLabel={periodLabel} />
+          )}
+          {tab === "bookings" && (
+            <BookingsView token={token} rangeQS={rangeQS} rangeKey={rangeKey} />
           )}
           {tab === "marketing" && (
             <MarketingView

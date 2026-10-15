@@ -7,6 +7,7 @@ import { parsePeriod, parseCustomRange } from "./icg/period";
 import { metaAds } from "./icg/meta";
 import { marketingBeta, parseLeadMonth } from "./icg/marketing-beta";
 import { marketingNew } from "./icg/marketing-new";
+import { bookingsList } from "./icg/bookings";
 import {
   readSnapshot,
   writeSnapshot,
@@ -431,6 +432,25 @@ export async function registerRoutes(httpServer: Server, app: Express): Promise<
       res.json(data);
     } catch (e: any) {
       res.status(400).json({ error: e?.message || "Failed to build forecast" });
+    }
+  });
+
+  // Bookings — every DS booking created in the selected window, with session
+  // time, sat status, booker, source ad, lead created date and dials to book.
+  // Same counting rules as the dashboard's DS booked figure (see bookings.ts).
+  app.get("/api/bookings", requireAuth, async (req, res) => {
+    try {
+      const force = req.query.refresh === "1";
+      const custom = parseCustomRange(
+        req.query.start as string | undefined,
+        req.query.end as string | undefined,
+      );
+      const range = custom ?? parsePeriod(req.query.period as string | undefined);
+      const key = custom ? `bookings:custom:${range.start}:${range.end}` : `bookings:${range.key}`;
+      const data = await cached(key, () => bookingsList(range), force);
+      res.json(data);
+    } catch (e: any) {
+      res.status(400).json({ error: e?.message || "Failed to build bookings" });
     }
   });
 
